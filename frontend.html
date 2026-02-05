@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Lab</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            height: 80vh;
+        }
+        .control-panel {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        .control-panel h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 24px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin: 30px 0;
+        }
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-start {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .btn-start:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-stop {
+            background: #ff6b6b;
+            color: white;
+        }
+        .btn-stop:hover {
+            background: #ff5252;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 107, 107, 0.4);
+        }
+        .btn-stop:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .status.info {
+            background: #e3f2fd;
+            color: #1565c0;
+            display: block;
+        }
+        .status.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            display: block;
+        }
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+            display: block;
+        }
+        .session-info {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+            font-size: 13px;
+            display: none;
+        }
+        .session-info.active {
+            display: block;
+        }
+        .session-info p {
+            margin: 8px 0;
+            word-break: break-all;
+        }
+        .iframe-container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .iframe-header {
+            background: #f5f5f5;
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 14px;
+            color: #666;
+        }
+        iframe {
+            flex: 1;
+            border: none;
+        }
+        .no-session {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            font-size: 14px;
+        }
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="control-panel">
+            <h1>DevOps Lab</h1>
+            
+            <div class="status" id="status"></div>
+            
+            <div class="form-group">
+                <label for="labType">Lab Type</label>
+                <select id="labType">
+                    <option value="linux">Linux</option>
+                </select>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn-start" id="startBtn" onclick="startLab()">Start Lab</button>
+                <button class="btn-stop" id="stopBtn" onclick="stopLab()" disabled>Stop Lab</button>
+            </div>
+            
+            <div class="session-info" id="sessionInfo">
+                <p><strong>Session ID:</strong></p>
+                <p id="sessionId" style="word-break: break-all;"></p>
+                <p style="margin-top: 15px;"><strong>Lab URL:</strong></p>
+                <p id="labUrl" style="word-break: break-all;"></p>
+            </div>
+        </div>
+        
+        <div class="iframe-container">
+            <div class="iframe-header" id="iframeHeader">Web Terminal</div>
+            <div id="iframeWrapper" class="no-session">
+                Click "Start Lab" to begin
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API URL is now on the same origin (backend serves both frontend and API on port 8080)
+        // This eliminates CORS issues entirely
+        const API_URL = window.location.origin;
+        let currentSessionId = null;
+        
+        console.log('API URL:', API_URL);
+
+        async function startLab() {
+            const labType = document.getElementById('labType').value;
+            const statusEl = document.getElementById('status');
+            const startBtn = document.getElementById('startBtn');
+            
+            startBtn.disabled = true;
+            statusEl.className = 'status info';
+            statusEl.textContent = 'Starting lab...';
+            
+            try {
+                const response = await fetch(`${API_URL}/start-lab`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ labType }),
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                currentSessionId = data.sessionID;
+                
+                // Update UI
+                document.getElementById('sessionId').textContent = data.sessionID;
+                document.getElementById('labUrl').textContent = data.url;
+                document.getElementById('sessionInfo').classList.add('active');
+                document.getElementById('stopBtn').disabled = false;
+                
+                // Load iframe
+                const iframeWrapper = document.getElementById('iframeWrapper');
+                iframeWrapper.innerHTML = `<iframe src="${data.url}"></iframe>`;
+                
+                statusEl.className = 'status success';
+                statusEl.textContent = 'Lab started successfully!';
+            } catch (error) {
+                statusEl.className = 'status error';
+                statusEl.textContent = `Error: ${error.message}`;
+                console.error('Start lab error:', error);
+                startBtn.disabled = false;
+            }
+        }
+
+        async function stopLab() {
+            if (!currentSessionId) return;
+            
+            const statusEl = document.getElementById('status');
+            const stopBtn = document.getElementById('stopBtn');
+            const startBtn = document.getElementById('startBtn');
+            
+            stopBtn.disabled = true;
+            statusEl.className = 'status info';
+            statusEl.textContent = 'Stopping lab...';
+            
+            try {
+                const response = await fetch(`${API_URL}/stop-lab`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ sessionID: currentSessionId }),
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                // Reset UI
+                currentSessionId = null;
+                document.getElementById('sessionInfo').classList.remove('active');
+                document.getElementById('iframeWrapper').innerHTML = '<div class="no-session">Click "Start Lab" to begin</div>';
+                startBtn.disabled = false;
+                
+                statusEl.className = 'status success';
+                statusEl.textContent = 'Lab stopped successfully!';
+            } catch (error) {
+                statusEl.className = 'status error';
+                statusEl.textContent = `Error: ${error.message}`;
+                console.error('Stop lab error:', error);
+                stopBtn.disabled = false;
+            }
+        }
+
+        // Allow Enter key to start lab
+        document.getElementById('labType').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') startLab();
+        });
+    </script>
+</body>
+</html>
