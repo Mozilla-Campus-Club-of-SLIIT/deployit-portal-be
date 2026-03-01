@@ -44,10 +44,28 @@ func TerminalProxyHandler(sm *docker.SessionManager) http.HandlerFunc {
 				req.URL.Path = "/"
 			}
 		}
+		if isWebSocketRequest(r) {
+			fmt.Printf("[WS] session=%s method=%s path=%s origin=%s host=%s remote=%s upgrade=%s connection=%s\n",
+				sessionID,
+				r.Method,
+				r.URL.Path,
+				r.Header.Get("Origin"),
+				r.Host,
+				r.RemoteAddr,
+				r.Header.Get("Upgrade"),
+				r.Header.Get("Connection"),
+			)
+		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, "Terminal unavailable", http.StatusBadGateway)
 		}
 
 		proxy.ServeHTTP(w, r)
 	}
+}
+
+func isWebSocketRequest(r *http.Request) bool {
+	conn := r.Header.Get("Connection")
+	upgrade := r.Header.Get("Upgrade")
+	return strings.Contains(strings.ToLower(conn), "upgrade") && strings.EqualFold(upgrade, "websocket")
 }

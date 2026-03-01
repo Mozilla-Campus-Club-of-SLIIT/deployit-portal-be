@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"time"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -41,7 +43,7 @@ func (dc *DockerClient) CreateLabContainer(hostPort int) (string, int, error) {
 
 	// Install ttyd and run it
 	// Install ttyd and run it (static binary for reliability)
-	cmd := []string{"bash", "-c", "set -e; apt-get update; apt-get install -y wget ca-certificates; wget -O /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64; chmod +x /usr/local/bin/ttyd; exec ttyd -p 7681 bash"}
+	cmd := []string{"bash", "-c", "set -e; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends wget ca-certificates; wget -O /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64; chmod +x /usr/local/bin/ttyd; export TERM=xterm-256color; exec ttyd -p 7681 -o bash -i"}
 
 	config := &container.Config{
 		Image: image,
@@ -61,7 +63,6 @@ func (dc *DockerClient) CreateLabContainer(hostPort int) (string, int, error) {
 		PortBindings: nat.PortMap{
 			nat.Port(containerPort + "/tcp"): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", hostPort)}},
 		},
-		CapDrop: []string{"ALL"},
 	}
 
 	networkingConfig := &network.NetworkingConfig{}
@@ -77,10 +78,30 @@ func (dc *DockerClient) CreateLabContainer(hostPort int) (string, int, error) {
 		return "", 0, fmt.Errorf("failed to start container: %w", err)
 	}
 
+	if err := waitForTTYD(hostPort, 5*time.Minute); err != nil {
+		fmt.Printf("[ERROR] ttyd did not become ready: %v\n", err)
+		return "", 0, fmt.Errorf("ttyd not ready: %w", err)
+	}
+
 	url := fmt.Sprintf("http://localhost:%d/", hostPort)
 	fmt.Printf("Lab session started. Open your browser: %s\n", url)
 
 	return resp.ID, hostPort, nil
+}
+
+func waitForTTYD(hostPort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	url := fmt.Sprintf("http://127.0.0.1:%d/", hostPort)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_ = resp.Body.Close()
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for %s", url)
 }
 
 // NewDockerClient creates a new DockerClient

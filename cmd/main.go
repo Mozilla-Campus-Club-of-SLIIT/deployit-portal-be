@@ -62,6 +62,15 @@ func main() {
 	mux.HandleFunc("/start-lab", corsMiddleware(api.StartLabHandler(sessionManager, dockerClient)))
 	mux.HandleFunc("/stop-lab", corsMiddleware(api.StopLabHandler(sessionManager)))
 	mux.HandleFunc("/terminal/", api.TerminalProxyHandler(sessionManager))
+	mux.HandleFunc("/debug-terminal", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if data, err := ioutil.ReadFile("./debug-terminal.html"); err == nil {
+			w.Write(data)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		fmt.Fprintln(w, "Debug terminal page not found")
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if data, err := ioutil.ReadFile("./frontend.html"); err == nil {
