@@ -1,57 +1,48 @@
-# DevOps Lab Backend MVP: Local Run Instructions
+# DevOps Lab Portal Backend
 
-## 1. Start the Go Server
+This is the Go backend API for the DevOps Lab platform. It dynamically provisions temporary web-based terminals (using `tsl0922/ttyd` running an Ubuntu bash shell) directly on **Google Cloud Run**.
 
-1. Ensure Docker is running locally.
-2. Install Go 1.21+.
-3. In the project root, run:
+## Prerequisites
+
+- Go 1.21+
+- A Google Cloud Project with the **Cloud Run Admin API** enabled.
+- Google Cloud Service Account with the following roles:
+  - **Cloud Run Admin** (`roles/run.admin`)
+  - **Service Account User** (`roles/iam.serviceAccountUser`)
+
+## Environment Setup
+
+1. Copy `.env.sample` to `.env`.
+   ```bash
+   cp .env.sample .env
+   ```
+2. Open `.env` and fill in your Google Cloud Project ID and your Service Account JSON credentials exactly as requested by the template.
+
+## Running the Backend Locally
+
+To start the Go server, and download any missing Go modules:
 
 ```bash
+go mod tidy
 go run ./cmd/main.go
 ```
 
-The server will listen on port 8080 and serve both the backend API and frontend.
+The server will start listening on `http://localhost:8080`.
 
 ---
 
-## 2. Access the Frontend
+## API Endpoints
 
-Open your browser and navigate to:
-
-```
-http://localhost:8080/
-```
-
-This loads the interactive lab management interface.
-
-Click "Start Lab" to create a new session with a web terminal.
-
----
-
-## 3. API Endpoints
-
-### POST /start-lab
-
-Create a new lab session:
-
+### `POST /start-lab`
+Dynamically provisions a new Cloud Run service containing a web terminal.
 ```bash
 curl -X POST http://localhost:8080/start-lab \
   -H "Content-Type: application/json" \
-  -d '{"labType": "linux"}'
+  -d '{"labType": "ubuntu"}'
 ```
 
-Response:
-```json
-{
-  "sessionID": "...",
-  "url": "http://localhost:<port>"
-}
-```
-
-### POST /stop-lab
-
-Stop a lab session:
-
+### `POST /stop-lab`
+Explicitly destroys the provisioned Cloud Run service.
 ```bash
 curl -X POST http://localhost:8080/stop-lab \
   -H "Content-Type: application/json" \
@@ -60,23 +51,6 @@ curl -X POST http://localhost:8080/stop-lab \
 
 ---
 
-## 4. Auto Cleanup
-
-- Sessions auto-stop after 30 minutes total or 5 minutes idle.
-- To test idle cleanup, do not interact with the terminal for 5 minutes.
-- To test total time, keep session open for 30 minutes.
-- Check server logs for `[CLEANUP]` events.
-
----
-
-## 5. Debug Common Issues
-
-- **Docker not running:** Ensure Docker daemon is started.
-- **Port collision:** Backend avoids collisions, but check for other local services using ports 20000-29999.
-- **Session limit reached:** Max 50 sessions; wait or stop sessions via `/stop-lab`.
-- **Container fails to start:** Check logs for `[ERROR]` messages.
-- **Web terminal not loading:** Ensure browser can access the returned port; check firewall settings.
-
----
-
-For further troubleshooting, review logs and ensure all dependencies are installed.
+## Auto Cleanup & Lifespan
+- The backend features a garbage-collection loop.
+- Any requested container will automatically be deleted via the Google Cloud Run API exactly **5 minutes** after creation to prevent runaway hosting costs.
