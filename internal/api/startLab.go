@@ -1,10 +1,10 @@
 package api
 
 import (
+	"devops-lab-backend/internal/cloudrun"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"devops-lab-backend/internal/docker"
 )
 
 type StartLabRequest struct {
@@ -16,7 +16,7 @@ type StartLabResponse struct {
 	URL       string `json:"url"`
 }
 
-func StartLabHandler(sm *docker.SessionManager, dc *docker.DockerClient) http.HandlerFunc {
+func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StartLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -25,37 +25,34 @@ func StartLabHandler(sm *docker.SessionManager, dc *docker.DockerClient) http.Ha
 			return
 		}
 
-		// Only "linux" supported for now
-		if req.LabType != "linux" {
+		if req.LabType != "ubuntu" {
 			http.Error(w, "Unsupported lab type", http.StatusBadRequest)
 			fmt.Printf("[ERROR] Unsupported lab type: %s\n", req.LabType)
 			return
 		}
 
-		port := sm.FindAvailablePort()
-		if port == 0 {
-			http.Error(w, "No available ports", http.StatusServiceUnavailable)
-			fmt.Printf("[ERROR] No available ports\n")
-			return
-		}
+		sessionID := cloudrun.GenerateSessionID()
+		flag := fmt.Sprintf("FLAG{%s}", cloudrun.GenerateSessionID())
 
-		containerID, assignedPort, err := dc.CreateLabContainer(port)
+		// Deploy to Cloud Run API
+		url, err := crc.CreateLabContainer(sessionID, flag)
 		if err != nil {
-			http.Error(w, "Failed to start lab container", http.StatusInternalServerError)
-			fmt.Printf("[ERROR] Failed to start lab container: %v\n", err)
+			http.Error(w, "Failed to start lab container on Cloud Run: "+err.Error(), http.StatusInternalServerError)
+			fmt.Printf("[ERROR] Failed to start cloud run lab container: %v\n", err)
 			return
 		}
 
-		session, err := sm.CreateSession(containerID, assignedPort)
+		session, err := sm.CreateSession(url, sessionID, flag)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			fmt.Printf("[ERROR] Session creation failed: %v\n", err)
+			fmt.Printf("[ERROR] Session creation failed (manager cache): %v\n", err)
 			return
 		}
 
+		// Cloud Run directly provides the terminal URL via HTTP!
 		resp := StartLabResponse{
 			SessionID: session.SessionID,
-			URL:       buildBaseURL(r) + "/terminal/" + session.SessionID,
+			URL:       url,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

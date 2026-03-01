@@ -1,9 +1,9 @@
 package api
 
 import (
+	"devops-lab-backend/internal/cloudrun"
 	"encoding/json"
 	"net/http"
-	"devops-lab-backend/internal/docker"
 )
 
 type StopLabRequest struct {
@@ -14,7 +14,7 @@ type StopLabResponse struct {
 	Status string `json:"status"`
 }
 
-func StopLabHandler(sm *docker.SessionManager) http.HandlerFunc {
+func StopLabHandler(sm *cloudrun.SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StopLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
