@@ -47,20 +47,29 @@ func main() {
 	sessionManager := cloudrun.NewSessionManager(cloudrunClient, 50)
 
 	mux := http.NewServeMux()
+
+	// --- Public routes (no auth required) ---
 	mux.HandleFunc("/api/challenges", corsMiddleware(api.GetChallengesHandler(firestoreClient)))
-	mux.HandleFunc("/api/challenges/add", corsMiddleware(api.AddChallengeHandler(firestoreClient)))
+	mux.HandleFunc("/api/leaderboard", corsMiddleware(api.LeaderboardHandler(firestoreClient)))
 	mux.HandleFunc("/api/register", corsMiddleware(api.RegisterHandler(firestoreClient)))
 	mux.HandleFunc("/api/login", corsMiddleware(api.LoginHandler(firestoreClient)))
-	mux.HandleFunc("/api/users", corsMiddleware(api.ListUsersHandler(firestoreClient)))
-	mux.HandleFunc("/start-lab", corsMiddleware(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient)))
-	mux.HandleFunc("/stop-lab", corsMiddleware(api.StopLabHandler(sessionManager, firestoreClient)))
-	mux.HandleFunc("/api/attempts", corsMiddleware(api.GetAttemptsHandler(firestoreClient)))
-	mux.HandleFunc("/api/upload-avatar", corsMiddleware(api.UploadAvatarHandler(firestoreClient)))
-	mux.HandleFunc("/api/sessions", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+
+	// --- Authenticated user routes (valid JWT required) ---
+	mux.HandleFunc("/api/attempts", corsMiddleware(api.RequireAuth(api.GetAttemptsHandler(firestoreClient))))
+	mux.HandleFunc("/api/upload-avatar", corsMiddleware(api.RequireAuth(api.UploadAvatarHandler(firestoreClient))))
+	mux.HandleFunc("/start-lab", corsMiddleware(api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient))))
+	mux.HandleFunc("/stop-lab", corsMiddleware(api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient))))
+
+	// --- Admin-only routes (valid JWT + role=admin required) ---
+	mux.HandleFunc("/api/users", corsMiddleware(api.RequireAdmin(api.ListUsersHandler(firestoreClient))))
+	mux.HandleFunc("/api/challenges/add", corsMiddleware(api.RequireAdmin(api.AddChallengeHandler(firestoreClient))))
+	mux.HandleFunc("/api/challenges/toggle", corsMiddleware(api.RequireAdmin(api.ToggleChallengeHandler(firestoreClient))))
+	mux.HandleFunc("/api/sessions", corsMiddleware(api.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		sessions := sessionManager.ListActiveSessions()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessions)
-	}))
+	})))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		fmt.Fprintln(w, "DevOps Lab Backend API Running")

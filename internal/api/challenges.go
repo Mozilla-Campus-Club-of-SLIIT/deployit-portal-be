@@ -43,3 +43,28 @@ func AddChallengeHandler(dbClient *db.FirestoreClient) http.HandlerFunc {
 		})
 	}
 }
+
+// ToggleChallengeHandler flips the locked/enabled state of a challenge.
+// PATCH /api/challenges/toggle?id=<challengeId>   (admin-only)
+func ToggleChallengeHandler(dbClient *db.FirestoreClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "id query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		newLocked, err := dbClient.ToggleChallengeLocked(r.Context(), id)
+		if err != nil {
+			http.Error(w, "Failed to toggle challenge: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      id,
+			"locked":  newLocked,
+			"enabled": !newLocked,
+		})
+	}
+}

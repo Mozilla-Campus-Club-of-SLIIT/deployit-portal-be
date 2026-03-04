@@ -114,6 +114,14 @@ func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 		log.Printf("[upload-avatar] File received: name=%s size=%d type=%s",
 			handler.Filename, handler.Size, handler.Header.Get("Content-Type"))
 
+		// Enforce 1MB limit
+		const maxSizeBytes = 1 * 1024 * 1024
+		if handler.Size > maxSizeBytes {
+			log.Printf("[upload-avatar] File too large: %d bytes", handler.Size)
+			http.Error(w, fmt.Sprintf("Profile image must be smaller than 1MB (got %.2fMB)", float64(handler.Size)/1024/1024), http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		ext := "jpg"
 		parts := strings.Split(handler.Filename, ".")
 		if len(parts) > 1 {

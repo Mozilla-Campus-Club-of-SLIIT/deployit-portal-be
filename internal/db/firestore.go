@@ -156,6 +156,30 @@ func (fc *FirestoreClient) AddChallenge(ctx context.Context, challenge *Challeng
 	return err
 }
 
+// ToggleChallengeLocked flips the `locked` field on a challenge document.
+// Returns the new locked state (true = disabled, false = enabled).
+func (fc *FirestoreClient) ToggleChallengeLocked(ctx context.Context, id string) (bool, error) {
+	ref := fc.client.Collection("challenges").Doc(id)
+
+	// Read current state
+	doc, err := ref.Get(ctx)
+	if err != nil {
+		return false, fmt.Errorf("challenge not found: %w", err)
+	}
+
+	var challenge Challenge
+	if err := doc.DataTo(&challenge); err != nil {
+		return false, err
+	}
+
+	newLocked := !challenge.Locked
+
+	_, err = ref.Update(ctx, []firestore.Update{
+		{Path: "locked", Value: newLocked},
+	})
+	return newLocked, err
+}
+
 // CreateUser saves a new user to Firestore
 func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, displayName string, passwordHash string) (*User, error) {
 	// Check if user already exists
