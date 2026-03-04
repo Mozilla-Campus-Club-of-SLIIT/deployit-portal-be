@@ -50,6 +50,7 @@ type User struct {
 	TotalScore   int       `firestore:"totalScore" json:"totalScore"`
 	CreatedAt    time.Time `firestore:"createdAt" json:"createdAt"`
 	Role         string    `firestore:"role" json:"role"`
+	PhotoUrl     string    `firestore:"photoUrl" json:"photoUrl"`
 }
 
 type FirestoreClient struct {
@@ -178,6 +179,14 @@ func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, display
 		return nil, err
 	}
 	return user, nil
+}
+
+// UpdateUserPhotoUrl sets the photoUrl field on an existing user document
+func (fc *FirestoreClient) UpdateUserPhotoUrl(ctx context.Context, userID string, photoUrl string) error {
+	_, err := fc.client.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
+		{Path: "photoUrl", Value: photoUrl},
+	})
+	return err
 }
 
 func (fc *FirestoreClient) CreateAdminUserExplicitly(ctx context.Context, user *User) (*User, error) {

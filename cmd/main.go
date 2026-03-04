@@ -55,6 +55,7 @@ func main() {
 	mux.HandleFunc("/start-lab", corsMiddleware(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient)))
 	mux.HandleFunc("/stop-lab", corsMiddleware(api.StopLabHandler(sessionManager, firestoreClient)))
 	mux.HandleFunc("/api/attempts", corsMiddleware(api.GetAttemptsHandler(firestoreClient)))
+	mux.HandleFunc("/api/upload-avatar", corsMiddleware(api.UploadAvatarHandler(firestoreClient)))
 	mux.HandleFunc("/api/sessions", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		sessions := sessionManager.ListActiveSessions()
 		w.Header().Set("Content-Type", "application/json")
