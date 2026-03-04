@@ -4,3 +4,4 @@ main.exe
 ttyd.exe
 ttyd_readme.md
 Dockerfile.ttyd
+scripts/*.go

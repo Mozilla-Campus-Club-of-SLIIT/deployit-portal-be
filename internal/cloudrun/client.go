@@ -3,6 +3,7 @@ package cloudrun
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -98,9 +99,16 @@ func NewCloudRunClient() (*CloudRunClient, error) {
 	}, nil
 }
 
+type LabConfig struct {
+	Image         string
+	EnvVars       map[string]string
+	ConfigFiles   map[string]string
+	StartupScript string
+}
+
 // CreateLabContainer creates the Cloud Run service and makes it publicly accessible
 // Returns the direct HTTPS URL to access the container
-func (c *CloudRunClient) CreateLabContainer(sessionID string, flag string) (string, error) {
+func (c *CloudRunClient) CreateLabContainer(sessionID string, config *LabConfig) (string, error) {
 	if c.client == nil || c.httpClient == nil {
 		return "", fmt.Errorf("Cloud Run Client is not fully initialized. Have you configured application default credentials? Try: gcloud auth application-default login")
 	}
@@ -110,7 +118,93 @@ func (c *CloudRunClient) CreateLabContainer(sessionID string, flag string) (stri
 	// Must match regex `^[a-z]([-a-z0-9]*[a-z0-9])?$`
 	parent := fmt.Sprintf("projects/%s/locations/%s", c.projectID, c.region)
 
-	fmt.Printf("[CLOUDRUN] Deploying service %s to %s...\n", serviceName, parent)
+	fmt.Printf("[CLOUDRUN] Deploying service %s with image %s to %s...\n", serviceName, config.Image, parent)
+
+	var envVars []*runpb.EnvVar
+	for k, v := range config.EnvVars {
+		envVars = append(envVars, &runpb.EnvVar{
+			Name: k,
+			Values: &runpb.EnvVar_Value{
+				Value: v,
+			},
+		})
+	}
+
+	// Build dynamic startup script
+	startupCmd := ""
+
+	// Inject Configuration Files
+	for path, content := range config.ConfigFiles {
+		b64Content := base64.StdEncoding.EncodeToString([]byte(content))
+		startupCmd += fmt.Sprintf("mkdir -p $(dirname '%s') && echo '%s' | base64 -d > '%s'\n", path, b64Content, path)
+	}
+
+	// Inject Pre-launch Script Actions
+	if config.StartupScript != "" {
+		startupCmd += config.StartupScript + "\n"
+	}
+
+	startupCmd += `
+# --- EVALUATION API SIDECAR ARCHITECTURE ---
+# Install Python and download Caddy proxy
+apt-get update && apt-get install -y python3 curl
+curl -sSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64"
+chmod +x /usr/bin/caddy
+
+# Create Python API Server for clean bash execution
+cat << 'EOF' > /tmp/eval_api.py
+import http.server
+import socketserver
+import subprocess
+import json
+
+class EvalHandler(http.server.SimpleHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/api/evaluate':
+            content_length = int(self.headers.get('Content-Length', 0))
+            script = ""
+            if content_length > 0:
+                post_data = self.rfile.read(content_length)
+                try:
+                    script = json.loads(post_data.decode('utf-8'))['script']
+                except Exception:
+                    pass
+            
+            result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'stdout': result.stdout.strip(),
+                'stderr': result.stderr.strip()
+            }).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+socketserver.TCPServer(("", 8081), EvalHandler).serve_forever()
+EOF
+
+# Create Caddy reverse-proxy routing
+cat << 'EOF' > /tmp/Caddyfile
+:8080 {
+    route /api/evaluate* {
+        reverse_proxy 127.0.0.1:8081
+    }
+    route {
+        reverse_proxy 127.0.0.1:8082
+    }
+}
+EOF
+
+# Start Python API and ttyd terminal in background
+python3 /tmp/eval_api.py &
+/usr/bin/ttyd -p 8082 -W bash &
+
+# Start Caddy as the main responsive container process
+exec /usr/bin/caddy run --config /tmp/Caddyfile
+`
 
 	req := &runpb.CreateServiceRequest{
 		Parent:    parent,
@@ -122,12 +216,13 @@ func (c *CloudRunClient) CreateLabContainer(sessionID string, flag string) (stri
 				},
 				Containers: []*runpb.Container{
 					{
-						Image:   "tsl0922/ttyd:latest",
+						Image:   config.Image,
 						Command: []string{"bash"},
 						Args: []string{
 							"-c",
-							fmt.Sprintf("echo '%s' > /root/flag.txt && exec ttyd -p 8080 -W -o bash", flag),
+							startupCmd,
 						},
+						Env: envVars,
 						Ports: []*runpb.ContainerPort{
 							{ContainerPort: 8080},
 						},

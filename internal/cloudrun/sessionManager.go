@@ -8,11 +8,16 @@ import (
 )
 
 type Session struct {
-	SessionID  string
-	URL        string
-	Flag       string
-	CreatedAt  time.Time
-	LastActive time.Time
+	SessionID       string
+	UserID          string
+	UserEmail       string
+	UserDisplayName string
+	ChallengeID     string
+	ChallengeScore  int
+	URL             string
+	EndScript       string
+	CreatedAt       time.Time
+	LastActive      time.Time
 }
 
 type SessionManager struct {
@@ -44,7 +49,7 @@ func GenerateSessionID() string {
 	return string(b)
 }
 
-func (sm *SessionManager) CreateSession(url string, sessionID string, flag string) (*Session, error) {
+func (sm *SessionManager) CreateSession(url string, sessionID string, userID string, userEmail string, userDisplayName string, challengeID string, challengeScore int, endScript string) (*Session, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	if len(sm.sessions) >= sm.maxSessions {
@@ -53,11 +58,16 @@ func (sm *SessionManager) CreateSession(url string, sessionID string, flag strin
 
 	now := time.Now()
 	s := &Session{
-		SessionID:  sessionID,
-		URL:        url,
-		Flag:       flag,
-		CreatedAt:  now,
-		LastActive: now,
+		SessionID:       sessionID,
+		UserID:          userID,
+		UserEmail:       userEmail,
+		UserDisplayName: userDisplayName,
+		ChallengeID:     challengeID,
+		ChallengeScore:  challengeScore,
+		URL:             url,
+		EndScript:       endScript,
+		CreatedAt:       now,
+		LastActive:      now,
 	}
 	sm.sessions[sessionID] = s
 	return s, nil
@@ -113,7 +123,7 @@ func (sm *SessionManager) cleanupSessions() {
 	for id, s := range sm.sessions {
 		totalAge := now.Sub(s.CreatedAt)
 		idleAge := now.Sub(s.LastActive)
-		if totalAge > 5*time.Minute || idleAge > 5*time.Minute {
+		if totalAge > 15*time.Minute || idleAge > 15*time.Minute {
 			// Auto delete Cloud Run service over budget
 			go sm.cloudrun.DeleteLabContainer(id)
 			delete(sm.sessions, id)

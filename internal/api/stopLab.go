@@ -2,19 +2,25 @@ package api
 
 import (
 	"devops-lab-backend/internal/cloudrun"
+	"devops-lab-backend/internal/db"
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 )
 
 type StopLabRequest struct {
-	SessionID string `json:"sessionID"`
+	SessionID      string `json:"sessionID"`
+	SkipEvaluation bool   `json:"skipEvaluation"`
 }
 
 type StopLabResponse struct {
 	Status string `json:"status"`
+	Result string `json:"result,omitempty"`
+	Output string `json:"output,omitempty"`
 }
 
-func StopLabHandler(sm *cloudrun.SessionManager) http.HandlerFunc {
+func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StopLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -27,13 +33,71 @@ func StopLabHandler(sm *cloudrun.SessionManager) http.HandlerFunc {
 			return
 		}
 
-		_, ok := sm.GetSession(req.SessionID)
+		session, ok := sm.GetSession(req.SessionID)
 		if !ok {
-			json.NewEncoder(w).Encode(StopLabResponse{Status: "failure"})
+			json.NewEncoder(w).Encode(StopLabResponse{Status: "failure", Result: "SESSION_NOT_FOUND"})
 			return
 		}
 
+		var result string
+		var evalOutput string
+
+		// If there is an EndScript and user wants evaluation, evaluate it before destroying the container
+		if !req.SkipEvaluation && session.EndScript != "" {
+			outstr, err := cloudrun.EvaluateScript(session.URL, session.EndScript)
+			if err != nil {
+				evalOutput = "Evaluation Error: " + err.Error()
+				result = "ERROR"
+			} else {
+				evalOutput = outstr
+				// Convention: scripts print PASS or FAIL
+				if strings.Contains(strings.ToUpper(outstr), "PASS") {
+					result = "SUCCESS"
+				} else if strings.Contains(strings.ToUpper(outstr), "FAIL") {
+					result = "FAILURE"
+				} else {
+					result = "EVALUATED"
+				}
+			}
+
+			log.Printf("[EVALUATION] Session: %s, Challenge: %s, User: %s, Result: %s\n",
+				req.SessionID, session.ChallengeID, session.UserID, result)
+			log.Printf("[EVALUATION OUTPUT] %s\n", evalOutput)
+
+			scoreEarned := 0
+			if result == "SUCCESS" {
+				scoreEarned = session.ChallengeScore
+			}
+
+			// Save the attempt to Firestore
+			if fc != nil {
+				err := fc.SaveAttempt(r.Context(), &db.ChallengeAttempt{
+					UserID:          session.UserID,
+					UserEmail:       session.UserEmail,
+					UserDisplayName: session.UserDisplayName,
+					ChallengeID:     session.ChallengeID,
+					Result:          result,
+					ScoreEarned:     scoreEarned,
+					Output:          evalOutput,
+				})
+				if err != nil {
+					log.Printf("[ERROR] Failed to save evaluation attempt to Firestore: %v\n", err)
+				} else {
+					log.Printf("[DATABASE] Attempt saved for user %s\n", session.UserID)
+					// If successful, increment user's total score
+					if result == "SUCCESS" && scoreEarned > 0 {
+						err := fc.IncrementUserScore(r.Context(), session.UserID, scoreEarned)
+						if err != nil {
+							log.Printf("[ERROR] Failed to increment user score: %v\n", err)
+						} else {
+							log.Printf("[DATABASE] User %s total score incremented by %d\n", session.UserID, scoreEarned)
+						}
+					}
+				}
+			}
+		}
+
 		sm.DeleteSession(req.SessionID)
-		json.NewEncoder(w).Encode(StopLabResponse{Status: "success"})
+		json.NewEncoder(w).Encode(StopLabResponse{Status: "success", Result: result, Output: evalOutput})
 	}
 }

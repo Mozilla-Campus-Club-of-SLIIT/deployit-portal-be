@@ -3,37 +3,14 @@ package main
 import (
 	"devops-lab-backend/internal/api"
 	"devops-lab-backend/internal/cloudrun"
+	"devops-lab-backend/internal/db"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 
-	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 )
-
-var upgrader = websocket.Upgrader{}
-
-func wsHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("WebSocket upgrade error:", err)
-		return
-	}
-	defer conn.Close()
-	for {
-		_, msg, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("Read error:", err)
-			break
-		}
-		log.Printf("Received: %s", msg)
-		if err := conn.WriteMessage(websocket.TextMessage, []byte("Echo: "+string(msg))); err != nil {
-			log.Println("Write error:", err)
-			break
-		}
-	}
-}
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -61,38 +38,36 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Cloud Run client: %v", err)
 	}
+
+	firestoreClient, err := db.NewFirestoreClient()
+	if err != nil {
+		log.Printf("Failed to initialize Firestore Client (dynamc challenges disabled): %v", err)
+	}
+
 	sessionManager := cloudrun.NewSessionManager(cloudrunClient, 50)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", wsHandler)
-	mux.HandleFunc("/start-lab", corsMiddleware(api.StartLabHandler(sessionManager, cloudrunClient)))
-	mux.HandleFunc("/stop-lab", corsMiddleware(api.StopLabHandler(sessionManager)))
-	mux.HandleFunc("/submit-challenge", corsMiddleware(api.SubmitChallengeHandler(sessionManager)))
-	// The frontend now talks directly to Cloud Run, so terminal proxy is not strictly needed.
-	// Keep the debug routes
-	mux.HandleFunc("/debug-terminal", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if data, err := ioutil.ReadFile("./debug-terminal.html"); err == nil {
-			w.Write(data)
-			return
-		}
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		fmt.Fprintln(w, "Debug terminal page not found")
-	})
+	mux.HandleFunc("/api/challenges", corsMiddleware(api.GetChallengesHandler(firestoreClient)))
+	mux.HandleFunc("/api/challenges/add", corsMiddleware(api.AddChallengeHandler(firestoreClient)))
+	mux.HandleFunc("/api/register", corsMiddleware(api.RegisterHandler(firestoreClient)))
+	mux.HandleFunc("/api/login", corsMiddleware(api.LoginHandler(firestoreClient)))
+	mux.HandleFunc("/api/users", corsMiddleware(api.ListUsersHandler(firestoreClient)))
+	mux.HandleFunc("/start-lab", corsMiddleware(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient)))
+	mux.HandleFunc("/stop-lab", corsMiddleware(api.StopLabHandler(sessionManager, firestoreClient)))
+	mux.HandleFunc("/api/attempts", corsMiddleware(api.GetAttemptsHandler(firestoreClient)))
+	mux.HandleFunc("/api/sessions", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		sessions := sessionManager.ListActiveSessions()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessions)
+	}))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if data, err := ioutil.ReadFile("./frontend.html"); err == nil {
-			w.Write(data)
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			fmt.Fprintln(w, "Lab Backend Running")
-		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		fmt.Fprintln(w, "DevOps Lab Backend API Running")
 	})
 
 	handler := corsMiddlewareGlobal(mux)
 	log.Println("Server listening on :8080")
 	log.Println("CORS enabled for all origins")
-	log.Println("Frontend available at http://localhost:8080/")
 	if err := http.ListenAndServe(":8080", handler); err != nil {
 		log.Fatal(err)
 	}
