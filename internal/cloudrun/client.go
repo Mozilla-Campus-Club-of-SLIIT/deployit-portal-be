@@ -139,18 +139,24 @@ func (c *CloudRunClient) CreateLabContainer(sessionID string, config *LabConfig)
 		startupCmd += fmt.Sprintf("mkdir -p $(dirname '%s') && echo '%s' | base64 -d > '%s'\n", path, b64Content, path)
 	}
 
+	startupCmd += `
+# --- 1. CORE DEPENDENCIES & SIDECAR BINARIES ---
+apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl wget ca-certificates procps nano vim
+curl -sSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64"
+chmod +x /usr/bin/caddy
+curl -sSL -o /usr/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" || apt-get install -y ttyd
+chmod +x /usr/bin/ttyd
+
+# --- 2. CHALLENGE STARTUP SCRIPT ---
+`
+
 	// Inject Pre-launch Script Actions
 	if config.StartupScript != "" {
 		startupCmd += config.StartupScript + "\n"
 	}
 
 	startupCmd += `
-# --- EVALUATION API SIDECAR ARCHITECTURE ---
-# Install Python and download Caddy proxy
-apt-get update && apt-get install -y python3 curl
-curl -sSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64"
-chmod +x /usr/bin/caddy
-
+# --- 3. EVALUATION API & WEBSERVER SETUP ---
 # Create Python API Server for clean bash execution
 cat << 'EOF' > /tmp/eval_api.py
 import http.server
