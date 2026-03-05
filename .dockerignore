@@ -1,0 +1,9 @@
+.git
+.gitignore
+.env
+.env.sample
+Dockerfile
+.dockerignore
+*.exe
+tmp_app.exe
+*.log
