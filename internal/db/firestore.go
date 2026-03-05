@@ -20,7 +20,8 @@ type Challenge struct {
 	Title         string            `firestore:"title" json:"title"`
 	Description   string            `firestore:"description" json:"description"`
 	Difficulty    string            `firestore:"difficulty" json:"difficulty"`
-	Score         int               `firestore:"score" json:"score"`
+	Score         int               `firestore:"score" json:"score"`         // Points awarded for passing
+	TimeLimit     int               `firestore:"timeLimit" json:"timeLimit"` // Lab timer in seconds
 	Image         string            `firestore:"image" json:"image"`
 	Tags          []string          `firestore:"tags" json:"tags"`
 	Locked        bool              `firestore:"locked" json:"locked"`

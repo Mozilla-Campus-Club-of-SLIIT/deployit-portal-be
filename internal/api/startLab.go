@@ -18,6 +18,7 @@ type StartLabRequest struct {
 type StartLabResponse struct {
 	SessionID string `json:"sessionID"`
 	URL       string `json:"url"`
+	TimeLimit int    `json:"timeLimit"`
 }
 
 func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, dbClient *db.FirestoreClient) http.HandlerFunc {
@@ -71,6 +72,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 		resp := StartLabResponse{
 			SessionID: session.SessionID,
 			URL:       url,
+			TimeLimit: challenge.TimeLimit,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

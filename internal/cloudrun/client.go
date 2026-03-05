@@ -219,6 +219,7 @@ exec /usr/bin/caddy run --config /tmp/Caddyfile
 			Template: &runpb.RevisionTemplate{
 				Annotations: map[string]string{
 					"run.googleapis.com/startup-cpu-boost": "false",
+					"run.googleapis.com/cpu-throttling":    "true", // Explicitly request-based billing
 				},
 				Containers: []*runpb.Container{
 					{
@@ -237,6 +238,7 @@ exec /usr/bin/caddy run --config /tmp/Caddyfile
 								"cpu":    "1000m",
 								"memory": "512Mi",
 							},
+							CpuIdle: true, // Explicitly request-based billing
 						},
 					},
 				},
