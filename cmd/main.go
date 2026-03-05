@@ -53,10 +53,12 @@ func main() {
 	mux.HandleFunc("/api/leaderboard", corsMiddleware(api.LeaderboardHandler(firestoreClient)))
 	mux.HandleFunc("/api/register", corsMiddleware(api.RegisterHandler(firestoreClient)))
 	mux.HandleFunc("/api/login", corsMiddleware(api.LoginHandler(firestoreClient)))
+	mux.HandleFunc("/api/forgot-password", corsMiddleware(api.ForgotPasswordHandler(firestoreClient)))
 
 	// --- Authenticated user routes (valid JWT required) ---
 	mux.HandleFunc("/api/attempts", corsMiddleware(api.RequireAuth(api.GetAttemptsHandler(firestoreClient))))
 	mux.HandleFunc("/api/upload-avatar", corsMiddleware(api.RequireAuth(api.UploadAvatarHandler(firestoreClient))))
+	mux.HandleFunc("/api/send-verification", corsMiddleware(api.RequireAuth(api.SendVerificationHandler(firestoreClient))))
 	mux.HandleFunc("/start-lab", corsMiddleware(api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient))))
 	mux.HandleFunc("/stop-lab", corsMiddleware(api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient))))
 
