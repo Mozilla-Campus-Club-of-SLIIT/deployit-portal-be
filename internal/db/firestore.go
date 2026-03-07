@@ -52,6 +52,8 @@ type User struct {
 	CreatedAt    time.Time `firestore:"createdAt" json:"createdAt"`
 	Role         string    `firestore:"role" json:"role"`
 	PhotoUrl     string    `firestore:"photoUrl" json:"photoUrl"`
+	OTPCode      string    `firestore:"otpCode" json:"-"`
+	OTPExpiry    time.Time `firestore:"otpExpiry" json:"-"`
 }
 
 type FirestoreClient struct {
@@ -179,6 +181,16 @@ func (fc *FirestoreClient) ToggleChallengeLocked(ctx context.Context, id string)
 		{Path: "locked", Value: newLocked},
 	})
 	return newLocked, err
+}
+
+// DeleteChallenge drops a new challenge from the DB
+func (fc *FirestoreClient) DeleteChallenge(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("challenge ID is required")
+	}
+
+	_, err := fc.client.Collection("challenges").Doc(id).Delete(ctx)
+	return err
 }
 
 // CreateUser saves a new user to Firestore
@@ -357,4 +369,37 @@ func (fc *FirestoreClient) ListUsers(ctx context.Context) ([]User, error) {
 	})
 
 	return users, nil
+}
+
+// SetOTP saves an OTP code for a user inside a given collection
+func (fc *FirestoreClient) SetOTP(ctx context.Context, collection, userID, otp string, expiry time.Time) error {
+	_, err := fc.client.Collection(collection).Doc(userID).Update(ctx, []firestore.Update{
+		{Path: "otpCode", Value: otp},
+		{Path: "otpExpiry", Value: expiry},
+	})
+	return err
+}
+
+// VerifyOTP validates the OTP code for a user in a given collection
+func (fc *FirestoreClient) VerifyOTP(ctx context.Context, collection, userID, otp string) error {
+	doc, err := fc.client.Collection(collection).Doc(userID).Get(ctx)
+	if err != nil {
+		return err
+	}
+	var u User
+	if err := doc.DataTo(&u); err != nil {
+		return err
+	}
+	if u.OTPCode == "" || u.OTPCode != otp {
+		return fmt.Errorf("invalid verification code")
+	}
+	if time.Now().After(u.OTPExpiry) {
+		return fmt.Errorf("verification code expired")
+	}
+	
+	// Clear the OTP on successful verification
+	fc.client.Collection(collection).Doc(userID).Update(ctx, []firestore.Update{
+		{Path: "otpCode", Value: ""},
+	})
+	return nil
 }

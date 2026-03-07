@@ -4,9 +4,11 @@ import (
 	"devops-lab-backend/internal/db"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/smtp"
 	"os"
+	"time"
 )
 
 type ForgotPasswordRequest struct {
@@ -15,6 +17,11 @@ type ForgotPasswordRequest struct {
 
 type SendVerificationRequest struct {
 	Email string `json:"email"`
+}
+
+type VerifyOtpRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
 }
 
 func sendEmail(to, subject, body string) error {
@@ -130,10 +137,16 @@ func SendVerificationHandler(fc *db.FirestoreClient) http.HandlerFunc {
 
 		// We assume the caller is authenticated and sent their own email,
 		// but since it could be from unverified state, we just send it if the account exists.
+		collection := "users"
 		user, err := fc.GetUserByEmail(r.Context(), req.Email)
 		if err != nil {
-			http.Error(w, "User not found", http.StatusNotFound)
-			return
+			// fallback to check if it's an admin
+			user, err = fc.GetAdminByEmail(r.Context(), req.Email)
+			if err != nil {
+				http.Error(w, "User not found", http.StatusNotFound)
+				return
+			}
+			collection = "admins"
 		}
 
 		verifyLink := "http://localhost:3000/verify-email?token=verifytoken123"
@@ -147,9 +160,56 @@ func SendVerificationHandler(fc *db.FirestoreClient) http.HandlerFunc {
 			<a href="%s">Verify Email</a>
 		`, user.DisplayName, verifyLink)
 
+		// Overriding for OTP behavior requested by user:
+		rRand := rand.New(rand.NewSource(time.Now().UnixNano()))
+		otpCode := fmt.Sprintf("%06d", rRand.Intn(1000000))
+		otpExpiry := time.Now().Add(10 * time.Minute)
+		
+		err = fc.SetOTP(r.Context(), collection, user.ID, otpCode, otpExpiry)
+		if err != nil {
+			http.Error(w, "Failed to store OTP", http.StatusInternalServerError)
+			return
+		}
+
+		body = fmt.Sprintf(`
+			<h2>Verify Your Email</h2>
+			<p>Hello %s,</p>
+			<p>Welcome to Deploy(it)! Here is your 6-digit verification code:</p>
+			<h3 style="letter-spacing: 0.2em; font-size: 24px;">%s</h3>
+			<p>This code will expire in 10 minutes.</p>
+		`, user.DisplayName, otpCode)
+
 		if err := sendEmail(req.Email, subject, body); err != nil {
 			fmt.Printf("Error sending verification email: %%v\n", err)
-			http.Error(w, "Failed to send verification email. Check SMTP config.", http.StatusInternalServerError)
+			http.Error(w, "Failed to send verification email.", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func VerifyOtpHandler(fc *db.FirestoreClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req VerifyOtpRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		collection := "users"
+		user, err := fc.GetUserByEmail(r.Context(), req.Email)
+		if err != nil {
+			user, err = fc.GetAdminByEmail(r.Context(), req.Email)
+			if err != nil {
+				http.Error(w, "User not found", http.StatusNotFound)
+				return
+			}
+			collection = "admins"
+		}
+
+		if err := fc.VerifyOTP(r.Context(), collection, user.ID, req.Code); err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
 

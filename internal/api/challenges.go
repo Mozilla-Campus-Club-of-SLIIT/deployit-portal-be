@@ -68,3 +68,26 @@ func ToggleChallengeHandler(dbClient *db.FirestoreClient) http.HandlerFunc {
 		})
 	}
 }
+
+// DeleteChallengeHandler deletes a challenge from Firestore
+// DELETE /api/challenges/delete?id=<challengeId>   (admin-only)
+func DeleteChallengeHandler(dbClient *db.FirestoreClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "id query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		if err := dbClient.DeleteChallenge(r.Context(), id); err != nil {
+			http.Error(w, "Failed to delete challenge: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "Challenge deleted successfully",
+		})
+	}
+}

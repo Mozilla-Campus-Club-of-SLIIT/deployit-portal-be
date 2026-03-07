@@ -65,6 +65,7 @@ func main() {
 	mux.HandleFunc("/api/attempts", api.RequireAuth(api.GetAttemptsHandler(firestoreClient)))
 	mux.HandleFunc("/api/upload-avatar", api.RequireAuth(api.UploadAvatarHandler(firestoreClient)))
 	mux.HandleFunc("/api/send-verification", api.RequireAuth(api.SendVerificationHandler(firestoreClient)))
+	mux.HandleFunc("/api/verify-otp", api.RequireAuth(api.VerifyOtpHandler(firestoreClient)))
 	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient)))
 	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient)))
 
@@ -72,6 +73,7 @@ func main() {
 	mux.HandleFunc("/api/users", api.RequireAdmin(api.ListUsersHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/add", api.RequireAdmin(api.AddChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/toggle", api.RequireAdmin(api.ToggleChallengeHandler(firestoreClient)))
+	mux.HandleFunc("/api/challenges/delete", api.RequireAdmin(api.DeleteChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/sessions", api.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		sessions := sessionManager.ListActiveSessions()
 		w.Header().Set("Content-Type", "application/json")
