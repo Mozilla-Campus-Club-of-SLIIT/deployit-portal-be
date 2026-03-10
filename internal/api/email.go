@@ -213,6 +213,14 @@ func VerifyOtpHandler(fc *db.FirestoreClient) http.HandlerFunc {
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
+		// Fetch updated user to reflect 'verified' status
+		updatedUser, err := fc.GetUserByID(r.Context(), user.ID)
+		if err != nil {
+			// fallback check in admins if not found in users
+			updatedUser, _ = fc.GetAdminByEmail(r.Context(), user.Email)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(updatedUser)
 	}
 }

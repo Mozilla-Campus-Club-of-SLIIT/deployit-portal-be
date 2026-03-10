@@ -54,6 +54,7 @@ type User struct {
 	PhotoUrl     string    `firestore:"photoUrl" json:"photoUrl"`
 	OTPCode      string    `firestore:"otpCode" json:"-"`
 	OTPExpiry    time.Time `firestore:"otpExpiry" json:"-"`
+	Verified     bool      `firestore:"verified" json:"verified"`
 }
 
 type FirestoreClient struct {
@@ -209,6 +210,7 @@ func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, display
 		PasswordHash: passwordHash,
 		CreatedAt:    time.Now(),
 		Role:         "user",
+		Verified:     false,
 	}
 
 	_, err := fc.client.Collection("users").Doc(user.ID).Set(ctx, user)
@@ -397,9 +399,10 @@ func (fc *FirestoreClient) VerifyOTP(ctx context.Context, collection, userID, ot
 		return fmt.Errorf("verification code expired")
 	}
 	
-	// Clear the OTP on successful verification
-	fc.client.Collection(collection).Doc(userID).Update(ctx, []firestore.Update{
+	// Clear the OTP on successful verification and set Verified to true
+	_, err = fc.client.Collection(collection).Doc(userID).Update(ctx, []firestore.Update{
 		{Path: "otpCode", Value: ""},
+		{Path: "verified", Value: true},
 	})
-	return nil
+	return err
 }
