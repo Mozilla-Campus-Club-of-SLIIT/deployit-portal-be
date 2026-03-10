@@ -42,6 +42,10 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient) http.Ha
 		var result string
 		var evalOutput string
 
+		if req.SkipEvaluation {
+			log.Printf("[TERMINATION] Session: %s, User: %s - Evaluation skipped by user request.\n", req.SessionID, session.UserID)
+		}
+
 		// If there is an EndScript and user wants evaluation, evaluate it before destroying the container
 		if !req.SkipEvaluation && session.EndScript != "" {
 			outstr, err := cloudrun.EvaluateScript(session.URL, session.EndScript)

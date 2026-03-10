@@ -113,7 +113,7 @@ func ForgotPasswordHandler(fc *db.FirestoreClient) http.HandlerFunc {
 		`, user.DisplayName, resetLink)
 
 		if err := sendEmail(req.Email, subject, body); err != nil {
-			fmt.Printf("Error sending email: %%v\n", err)
+			fmt.Printf("Error sending email: %v\n", err)
 			http.Error(w, "Failed to send email. Check SMTP config.", http.StatusInternalServerError)
 			return
 		}
@@ -180,7 +180,7 @@ func SendVerificationHandler(fc *db.FirestoreClient) http.HandlerFunc {
 		`, user.DisplayName, otpCode)
 
 		if err := sendEmail(req.Email, subject, body); err != nil {
-			fmt.Printf("Error sending verification email: %%v\n", err)
+			fmt.Printf("Error sending verification email: %v\n", err)
 			http.Error(w, "Failed to send verification email.", http.StatusInternalServerError)
 			return
 		}

@@ -16,9 +16,10 @@ type StartLabRequest struct {
 }
 
 type StartLabResponse struct {
-	SessionID string `json:"sessionID"`
-	URL       string `json:"url"`
-	TimeLimit int    `json:"timeLimit"`
+	SessionID   string `json:"sessionID"`
+	URL         string `json:"url"`
+	TimeLimit   int    `json:"timeLimit"`
+	ChallengeID string `json:"challengeID"`
 }
 
 func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, dbClient *db.FirestoreClient) http.HandlerFunc {
@@ -34,6 +35,34 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			http.Error(w, "Missing userID", http.StatusBadRequest)
 			return
 		}
+
+		// Check if user already has an active session
+		if session, ok := sm.GetUserSession(req.UserID); ok {
+			// Find the challenge they are currently running to get the time limit
+			currentChallenge, _ := dbClient.GetChallenge(r.Context(), session.ChallengeID)
+			timeLimit := 300
+			if currentChallenge != nil {
+				timeLimit = currentChallenge.TimeLimit
+			}
+
+			resp := StartLabResponse{
+				SessionID:   session.SessionID,
+				URL:         session.URL,
+				TimeLimit:   timeLimit,
+				ChallengeID: session.ChallengeID,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Lock the user's session creation process to prevent concurrent provisionings (race conditions)
+		if err := sm.LockSession(req.UserID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			fmt.Printf("[WARN] Concurrent lab start attempt blocked for user %s: %v\n", req.UserID, err)
+			return
+		}
+		defer sm.UnlockSession(req.UserID)
 
 		// Safely lookup Firebase
 		challenge, err := dbClient.GetChallenge(r.Context(), req.LabType)
@@ -70,12 +99,50 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 
 		// Cloud Run directly provides the terminal URL via HTTP!
 		resp := StartLabResponse{
-			SessionID: session.SessionID,
-			URL:       url,
-			TimeLimit: challenge.TimeLimit,
+			SessionID:   session.SessionID,
+			URL:         url,
+			TimeLimit:   challenge.TimeLimit,
+			ChallengeID: req.LabType,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func GetCurrentSessionHandler(sm *cloudrun.SessionManager, dbClient *db.FirestoreClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := r.URL.Query().Get("userId")
+		if userID == "" {
+			http.Error(w, "Missing userId", http.StatusBadRequest)
+			return
+		}
+
+		if session, ok := sm.GetUserSession(userID); ok {
+			currentChallenge, _ := dbClient.GetChallenge(r.Context(), session.ChallengeID)
+			timeLimit := 300
+			if currentChallenge != nil {
+				timeLimit = currentChallenge.TimeLimit
+			}
+
+			resp := StartLabResponse{
+				SessionID:   session.SessionID,
+				URL:         session.URL,
+				TimeLimit:   timeLimit,
+				ChallengeID: session.ChallengeID,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Check if it's still being provisioned
+		if sm.IsProvisioning(userID) {
+			w.WriteHeader(http.StatusAccepted) // 202 Accepted means we are still working on it
+			w.Write([]byte("Lab session is currently being provisioned"))
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
 	}
 }
 

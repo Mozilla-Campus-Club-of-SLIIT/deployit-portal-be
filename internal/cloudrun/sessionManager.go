@@ -23,6 +23,7 @@ type Session struct {
 type SessionManager struct {
 	mu          sync.RWMutex
 	sessions    map[string]*Session
+	pending     map[string]time.Time // UserID -> StartTime to prevent race conditions
 	cloudrun    *CloudRunClient
 	stopCh      chan struct{}
 	maxSessions int
@@ -31,6 +32,7 @@ type SessionManager struct {
 func NewSessionManager(cloudrun *CloudRunClient, maxSessions int) *SessionManager {
 	sm := &SessionManager{
 		sessions:    make(map[string]*Session),
+		pending:     make(map[string]time.Time),
 		cloudrun:    cloudrun,
 		stopCh:      make(chan struct{}),
 		maxSessions: maxSessions,
@@ -81,6 +83,55 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 		s.LastActive = time.Now()
 	}
 	return s, ok
+}
+
+func (sm *SessionManager) GetUserSession(userID string) (*Session, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, s := range sm.sessions {
+		if s.UserID == userID {
+			s.LastActive = time.Now()
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+func (sm *SessionManager) LockSession(userID string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// 1. Check if user already has an active session in the map
+	for _, s := range sm.sessions {
+		if s.UserID == userID {
+			return fmt.Errorf("user already has an active session")
+		}
+	}
+
+	// 2. Check if a session is already being created for this user
+	if startTime, ok := sm.pending[userID]; ok {
+		// Only block if the pending request is recent (e.g., within 5 minutes)
+		// to prevent permanent locking if a request crashes
+		if time.Since(startTime) < 5*time.Minute {
+			return fmt.Errorf("a session is currently being provisioned for your account")
+		}
+	}
+
+	sm.pending[userID] = time.Now()
+	return nil
+}
+
+func (sm *SessionManager) UnlockSession(userID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	delete(sm.pending, userID)
+}
+
+func (sm *SessionManager) IsProvisioning(userID string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	_, ok := sm.pending[userID]
+	return ok
 }
 
 func (sm *SessionManager) DeleteSession(sessionID string) {

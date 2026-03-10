@@ -29,6 +29,7 @@ type Challenge struct {
 	ConfigFiles   map[string]string `firestore:"configFiles" json:"configFiles"`
 	StartupScript string            `firestore:"startupScript" json:"startupScript"`
 	EndScript     string            `firestore:"endScript" json:"endScript"`
+	Gen2          bool              `firestore:"gen2" json:"gen2"`
 }
 
 type ChallengeAttempt struct {

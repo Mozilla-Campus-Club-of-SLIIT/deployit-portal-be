@@ -246,6 +246,7 @@ exec /usr/bin/caddy run --config /tmp/Caddyfile
 					MinInstanceCount: 0,
 					MaxInstanceCount: 1,
 				},
+				MaxInstanceRequestConcurrency: 250,
 			},
 		},
 	}
