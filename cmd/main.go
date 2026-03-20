@@ -73,8 +73,8 @@ func main() {
 				if count > 0 {
 					log.Printf("[MAINTENANCE] Cleaned up %d expired namespaces", count)
 				}
-				// Aggressive 15min idle timeout for the entire cluster to save cost
-				_ = k8sClient.DeleteClusterIfIdle(ctx, 15)
+				// Warm node strategy: keep cluster for 45min idle to save startup time for next students
+				_ = k8sClient.DeleteClusterIfIdle(ctx, 45)
 			}
 		}()
 	}

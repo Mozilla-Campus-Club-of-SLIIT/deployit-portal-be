@@ -35,7 +35,7 @@ type ChallengeConfig struct {
 	Namespace     string
 	ChallengeID   string
 	UserID        string
-	ExpiryHours   int
+	ExpiryHours   float64
 	CPUQuota      string
 	MemoryQuota   string
 	PodQuota      string
@@ -65,7 +65,7 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 				"user-id":      config.UserID,
 			},
 			Annotations: map[string]string{
-				"expires-at": time.Now().Add(time.Duration(config.ExpiryHours) * time.Hour).Format(time.RFC3339),
+				"expires-at": time.Now().Add(time.Duration(float64(time.Hour) * config.ExpiryHours)).Format(time.RFC3339),
 			},
 		},
 	}
@@ -172,6 +172,9 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 				Args: []string{
 					fmt.Sprintf("%s\ntail -f /dev/null", config.StartupScript),
 				},
+				SecurityContext: &corev1.SecurityContext{
+					Privileged: boolPtr(true),
+				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse(config.CPUQuota),
@@ -202,26 +205,13 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 						},
 					},
 				},
-				Ports: []corev1.ContainerPort{{ContainerPort: 8080}},
+				Ports: []corev1.ContainerPort{{ContainerPort: 9000}},
 				Command: []string{"/bin/sh", "-c"},
 				Args: []string{
-					"apk add --no-cache curl kubectl bash && " +
+					"apk add --no-cache curl kubectl bash > /dev/null && " +
 						"curl -fsSL -L -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 && " +
 						"chmod +x /usr/local/bin/ttyd && " +
-						"cat << 'EOF' > /usr/local/bin/start-terminal.sh\n" +
-						"#!/bin/bash\n" +
-						"echo '--- Deploy(it) Lab Terminal ---'\n" +
-						"echo 'Syncing with challenge container...'\n" +
-						"for i in 1 2 3 4 5 6 7 8 9 10; do\n" +
-						"  kubectl exec -it $POD_NAME -c challenge-container -- bash && exit 0\n" +
-						"  kubectl exec -it $POD_NAME -c challenge-container -- sh && exit 0\n" +
-						"  sleep 2\n" +
-						"done\n" +
-						"echo 'FAILED: Could not reach challenge container. Falling back to sidecar.'\n" +
-						"exec bash\n" +
-						"EOF\n" +
-						"chmod +x /usr/local/bin/start-terminal.sh && " +
-						"ttyd -W -p 8080 /usr/local/bin/start-terminal.sh",
+						"ttyd -W -p 9000 bash -c \"echo 'Connecting to lab environment...'; kubectl exec -it $POD_NAME -c challenge-container -- bash || kubectl exec -it $POD_NAME -c challenge-container -- sh\"",
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
@@ -242,7 +232,7 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
 						TCPSocket: &corev1.TCPSocketAction{
-							Port: intstr.FromInt(8080),
+							Port: intstr.FromInt(9000),
 						},
 					},
 					InitialDelaySeconds: 5,
@@ -485,3 +475,4 @@ func (c *K8sClient) EvaluateScript(ctx context.Context, namespace, script string
 	}
 	return "", nil
 }
+func boolPtr(b bool) *bool { return &b }

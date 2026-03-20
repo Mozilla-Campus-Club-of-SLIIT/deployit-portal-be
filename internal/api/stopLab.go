@@ -56,16 +56,24 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s
 			} else {
 				outstr, err = cloudrun.EvaluateScript(session.URL, session.EndScript)
 			}
-			if err != nil {
-				evalOutput = "Evaluation Error: " + err.Error()
+			// Clean up output string to avoid messy logs
+			evalOutput = strings.TrimSpace(outstr)
+
+			if evalOutput == "" && err != nil {
+				evalOutput = "Evaluation System Error: " + err.Error()
 				result = "ERROR"
 			} else {
-				evalOutput = outstr
 				// Convention: scripts print PASS or FAIL
-				if strings.Contains(strings.ToUpper(outstr), "PASS") {
+				// We prioritize the string content over the exit code because a non-zero exit code
+				// is actually EXPECTED when the script reports a FAIL.
+				if strings.Contains(strings.ToUpper(evalOutput), "PASS") {
 					result = "SUCCESS"
-				} else if strings.Contains(strings.ToUpper(outstr), "FAIL") {
+				} else if strings.Contains(strings.ToUpper(evalOutput), "FAIL") {
 					result = "FAILURE"
+				} else if err != nil {
+					// It failed but doesn't have a clear PASS/FAIL string
+					evalOutput = "Evaluation Error: " + err.Error() + "\nOutput: " + evalOutput
+					result = "ERROR"
 				} else {
 					result = "EVALUATED"
 				}

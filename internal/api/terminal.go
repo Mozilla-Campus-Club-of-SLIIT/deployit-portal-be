@@ -92,7 +92,7 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 
 			req.URL.Scheme = "https"
 			req.URL.Host = target.Host
-			req.URL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:8080/proxy%s", 
+			req.URL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:9000/proxy%s", 
 				session.Namespace, podName, subpath)
 			req.Host = target.Host
 			log.Printf("[TERMINAL] Proxying HTTP to: %s", req.URL.String())
@@ -116,8 +116,8 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config,
 		subpath = "/" + subpath
 	}
 
-	// GKE API Server WebSocket proxy path
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:8080/proxy%s", ns, podName, subpath)
+	// GKE API Server WebSocket proxy path to sidecar on port 9000
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:9000/proxy%s", ns, podName, subpath)
 	
 	targetURL, _ := url.Parse(config.Host)
 	targetURL.Path = path

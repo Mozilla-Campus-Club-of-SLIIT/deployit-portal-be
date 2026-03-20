@@ -32,7 +32,13 @@ func NewClusterManager(ctx context.Context) (*ClusterManager, error) {
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	region := os.Getenv("GOOGLE_CLOUD_REGION")
 	if region == "" {
-		region = "us-central1"
+		region = "us-central1-a"
+	}
+	// If only a region is provided (like us-central1), force a zone to save cost
+	if !strings.Contains(region, "-") || len(strings.Split(region, "-")) < 3 {
+		if !strings.HasSuffix(region, "-a") {
+			region = region + "-a"
+		}
 	}
 
 	var opts []option.ClientOption
@@ -118,13 +124,24 @@ func (cm *ClusterManager) ManualCreateCluster(ctx context.Context) error {
 	
 	req := &container.CreateClusterRequest{
 		Cluster: &container.Cluster{
-			Name:             clusterName,
-			InitialNodeCount: 1,
-			NodeConfig: &container.NodeConfig{
-				MachineType: "e2-medium",
-				Spot:        true,
-				Labels: map[string]string{
-					"cloud.google.com/gke-spot": "true",
+			Name: clusterName,
+			NodePools: []*container.NodePool{
+				{
+					Name:             "default-pool",
+					InitialNodeCount: 1,
+					Autoscaling: &container.NodePoolAutoscaling{
+						Enabled:      true,
+						MinNodeCount: 1,
+						MaxNodeCount: 5, // Scale up to 5 nodes if needed
+					},
+					Config: &container.NodeConfig{
+						MachineType: "e2-medium",
+						Spot:        true,
+						Labels: map[string]string{
+							"cloud.google.com/gke-spot": "true",
+						},
+						DiskSizeGb: 20, // Reduce from default 100GB to save disk cost
+					},
 				},
 			},
 		},

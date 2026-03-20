@@ -97,7 +97,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 				Namespace:     namespace,
 				ChallengeID:   req.LabType,
 				UserID:        req.UserID,
-				ExpiryHours:   1, // Reduce to 1 hour for cost saving
+				ExpiryHours:   0.5, // Reduce to 30 minutes for cost saving
 				CPUQuota:      challenge.CPUQuota,
 				MemoryQuota:   challenge.MemoryQuota,
 				PodQuota:      challenge.PodQuota,

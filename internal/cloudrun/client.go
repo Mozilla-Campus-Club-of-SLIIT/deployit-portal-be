@@ -12,9 +12,10 @@ import (
 
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
+	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"google.golang.org/api/option"
 )
 
 type CloudRunClient struct {
@@ -218,9 +219,10 @@ exec /usr/bin/caddy run --config /tmp/Caddyfile
 		Service: &runpb.Service{
 			Template: &runpb.RevisionTemplate{
 				Annotations: map[string]string{
-					"run.googleapis.com/startup-cpu-boost": "false",
+					"run.googleapis.com/startup-cpu-boost": "true",
 					"run.googleapis.com/cpu-throttling":    "true", // Explicitly request-based billing
 				},
+				Timeout: &durationpb.Duration{Seconds: 600}, // Increase to 10 minutes for slow apt/curl
 				Containers: []*runpb.Container{
 					{
 						Image:   config.Image,
