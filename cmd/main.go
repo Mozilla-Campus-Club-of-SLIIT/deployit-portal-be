@@ -101,6 +101,9 @@ func main() {
 	mux.HandleFunc("/api/challenges/add", api.RequireAdmin(api.AddChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/toggle", api.RequireAdmin(api.ToggleChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/delete", api.RequireAdmin(api.DeleteChallengeHandler(firestoreClient)))
+	mux.HandleFunc("/api/cluster/status", api.RequireAdmin(api.GetClusterStatusHandler(k8sClient)))
+	mux.HandleFunc("/api/cluster/create", api.RequireAdmin(api.CreateClusterHandler(k8sClient)))
+	mux.HandleFunc("/api/cluster/delete", api.RequireAdmin(api.DeleteClusterHandler(k8sClient)))
 	mux.HandleFunc("/api/sessions", api.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		sessions := sessionManager.ListActiveSessions()
 		w.Header().Set("Content-Type", "application/json")

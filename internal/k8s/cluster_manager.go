@@ -203,6 +203,14 @@ func (cm *ClusterManager) DeleteClusterIfIdle(ctx context.Context, idleMinutes i
 	return nil
 }
 
+func (cm *ClusterManager) GetClusterStatus(ctx context.Context) (string, string, error) {
+	cluster, err := cm.findActiveCluster(ctx)
+	if err != nil {
+		return "", "OFFLINE", nil
+	}
+	return cluster.Name, cluster.Status, nil
+}
+
 func (cm *ClusterManager) findActiveCluster(ctx context.Context) (*container.Cluster, error) {
 	parent := fmt.Sprintf("projects/%s/locations/%s", cm.projectID, cm.region)
 	resp, err := cm.service.Projects.Locations.Clusters.List(parent).Context(ctx).Do()
