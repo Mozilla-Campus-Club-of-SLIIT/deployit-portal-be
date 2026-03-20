@@ -30,6 +30,10 @@ type Challenge struct {
 	StartupScript string            `firestore:"startupScript" json:"startupScript"`
 	EndScript     string            `firestore:"endScript" json:"endScript"`
 	Gen2          bool              `firestore:"gen2" json:"gen2"`
+	IsK8s         bool              `firestore:"isK8s" json:"isK8s"`
+	CPUQuota      string            `firestore:"cpuQuota" json:"cpuQuota"`       // e.g. "1"
+	MemoryQuota   string            `firestore:"memoryQuota" json:"memoryQuota"` // e.g. "1Gi"
+	PodQuota      string            `firestore:"podQuota" json:"podQuota"`       // e.g. "10"
 }
 
 type ChallengeAttempt struct {
@@ -123,6 +127,17 @@ func (fc *FirestoreClient) GetChallenge(ctx context.Context, id string) (*Challe
 	// Default image fallback just in case
 	if challenge.Image == "" {
 		challenge.Image = "tsl0922/ttyd:latest"
+	}
+	if challenge.IsK8s {
+		if challenge.CPUQuota == "" {
+			challenge.CPUQuota = "500m"
+		}
+		if challenge.MemoryQuota == "" {
+			challenge.MemoryQuota = "512Mi"
+		}
+		if challenge.PodQuota == "" {
+			challenge.PodQuota = "10"
+		}
 	}
 	return &challenge, nil
 }

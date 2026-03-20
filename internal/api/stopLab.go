@@ -3,6 +3,7 @@ package api
 import (
 	"devops-lab-backend/internal/cloudrun"
 	"devops-lab-backend/internal/db"
+	"devops-lab-backend/internal/k8s"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -20,7 +21,7 @@ type StopLabResponse struct {
 	Output string `json:"output,omitempty"`
 }
 
-func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient) http.HandlerFunc {
+func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s.K8sClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StopLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -48,7 +49,13 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient) http.Ha
 
 		// If there is an EndScript and user wants evaluation, evaluate it before destroying the container
 		if !req.SkipEvaluation && session.EndScript != "" {
-			outstr, err := cloudrun.EvaluateScript(session.URL, session.EndScript)
+			var outstr string
+			var err error
+			if session.IsK8s && kc != nil {
+				outstr, err = kc.EvaluateScript(r.Context(), session.Namespace, session.EndScript)
+			} else {
+				outstr, err = cloudrun.EvaluateScript(session.URL, session.EndScript)
+			}
 			if err != nil {
 				evalOutput = "Evaluation Error: " + err.Error()
 				result = "ERROR"

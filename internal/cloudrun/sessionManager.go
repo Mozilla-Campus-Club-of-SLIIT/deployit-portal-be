@@ -1,7 +1,9 @@
 package cloudrun
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -18,6 +20,8 @@ type Session struct {
 	EndScript       string
 	CreatedAt       time.Time
 	LastActive      time.Time
+	IsK8s           bool
+	Namespace       string
 }
 
 type SessionManager struct {
@@ -25,15 +29,24 @@ type SessionManager struct {
 	sessions    map[string]*Session
 	pending     map[string]time.Time // UserID -> StartTime to prevent race conditions
 	cloudrun    *CloudRunClient
+	k8sClient   K8sOrchestrator
 	stopCh      chan struct{}
 	maxSessions int
 }
 
-func NewSessionManager(cloudrun *CloudRunClient, maxSessions int) *SessionManager {
+type K8sOrchestrator interface {
+	DeleteNamespace(ctx context.Context, namespace string) error
+	MarkClusterActive()
+	DeleteClusterIfIdle(ctx context.Context, idleMinutes int) error
+}
+
+func NewSessionManager(cloudrun *CloudRunClient, k8sClient interface{}, maxSessions int) *SessionManager {
+	k8s, _ := k8sClient.(K8sOrchestrator)
 	sm := &SessionManager{
 		sessions:    make(map[string]*Session),
 		pending:     make(map[string]time.Time),
 		cloudrun:    cloudrun,
+		k8sClient:   k8s,
 		stopCh:      make(chan struct{}),
 		maxSessions: maxSessions,
 	}
@@ -81,6 +94,9 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 	s, ok := sm.sessions[sessionID]
 	if ok {
 		s.LastActive = time.Now()
+		if s.IsK8s && sm.k8sClient != nil {
+			sm.k8sClient.MarkClusterActive()
+		}
 	}
 	return s, ok
 }
@@ -91,6 +107,9 @@ func (sm *SessionManager) GetUserSession(userID string) (*Session, bool) {
 	for _, s := range sm.sessions {
 		if s.UserID == userID {
 			s.LastActive = time.Now()
+			if s.IsK8s && sm.k8sClient != nil {
+				sm.k8sClient.MarkClusterActive()
+			}
 			return s, true
 		}
 	}
@@ -137,9 +156,17 @@ func (sm *SessionManager) IsProvisioning(userID string) bool {
 func (sm *SessionManager) DeleteSession(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if _, ok := sm.sessions[sessionID]; ok {
-		// Asynchronously delete Cloud Run Service
-		go sm.cloudrun.DeleteLabContainer(sessionID)
+	if s, ok := sm.sessions[sessionID]; ok {
+		if s.IsK8s {
+			// Asynchronously delete K8s Namespace
+			if sm.k8sClient != nil {
+				log.Printf("[CLEANUP] Deleting K8s Namespace %s...", s.Namespace)
+				go sm.k8sClient.DeleteNamespace(context.Background(), s.Namespace)
+			}
+		} else {
+			// Asynchronously delete Cloud Run Service
+			go sm.cloudrun.DeleteLabContainer(sessionID)
+		}
 	}
 	delete(sm.sessions, sessionID)
 }
@@ -178,7 +205,9 @@ func (sm *SessionManager) cleanupSessions() {
 			// Auto delete Cloud Run service over budget
 			go sm.cloudrun.DeleteLabContainer(id)
 			delete(sm.sessions, id)
-			fmt.Printf("[CLEANUP] Deleted Cloud Run session %s (total: %v, idle: %v)\n", id, totalAge, idleAge)
+			fmt.Printf("[CLEANUP] Deleted session %s (total: %v, idle: %v)\n", id, totalAge, idleAge)
 		}
 	}
+
+	// Cluster Idle Reaper removed as per manual script requirement
 }

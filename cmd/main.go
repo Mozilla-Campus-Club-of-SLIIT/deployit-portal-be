@@ -4,11 +4,14 @@ import (
 	"devops-lab-backend/internal/api"
 	"devops-lab-backend/internal/cloudrun"
 	"devops-lab-backend/internal/db"
+	"devops-lab-backend/internal/k8s"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -50,9 +53,31 @@ func main() {
 		log.Printf("Failed to initialize Firestore Client (dynamic challenges disabled): %v", err)
 	}
 
-	sessionManager := cloudrun.NewSessionManager(cloudrunClient, 50)
+	k8sClient, err := k8s.NewK8sClient(context.Background())
+	if err != nil {
+		log.Printf("Failed to initialize K8s Client (K8s challenges disabled): %v", err)
+	}
+
+	sessionManager := cloudrun.NewSessionManager(cloudrunClient, k8sClient, 50)
 
 	mux := http.NewServeMux()
+	
+	// Start background worker for cluster maintenance & cost optimization
+	if k8sClient != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				ctx := context.Background()
+				count, _ := k8sClient.CleanupExpiredNamespaces(ctx)
+				if count > 0 {
+					log.Printf("[MAINTENANCE] Cleaned up %d expired namespaces", count)
+				}
+				// Aggressive 15min idle timeout for the entire cluster to save cost
+				_ = k8sClient.DeleteClusterIfIdle(ctx, 15)
+			}
+		}()
+	}
 
 	// --- Public routes ---
 	mux.HandleFunc("/api/challenges", api.GetChallengesHandler(firestoreClient))
@@ -67,8 +92,9 @@ func main() {
 	mux.HandleFunc("/api/send-verification", api.RequireAuth(api.SendVerificationHandler(firestoreClient)))
 	mux.HandleFunc("/api/verify-otp", api.RequireAuth(api.VerifyOtpHandler(firestoreClient)))
 	mux.HandleFunc("/api/current-session", api.RequireAuth(api.GetCurrentSessionHandler(sessionManager, firestoreClient)))
-	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, firestoreClient)))
-	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient)))
+	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, k8sClient, firestoreClient)))
+	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient, k8sClient)))
+	mux.HandleFunc("/api/terminal/", api.TerminalProxyHandler(sessionManager, k8sClient))
 
 	// --- Admin-only routes ---
 	mux.HandleFunc("/api/users", api.RequireAdmin(api.ListUsersHandler(firestoreClient)))
