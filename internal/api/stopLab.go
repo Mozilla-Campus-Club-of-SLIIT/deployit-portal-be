@@ -85,7 +85,16 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s
 
 			scoreEarned := 0
 			if result == "SUCCESS" {
-				scoreEarned = session.ChallengeScore
+				// Only award points on the FIRST attempt
+				var hasAttempted bool
+				if fc != nil {
+					hasAttempted, _ = fc.HasAttemptedChallenge(r.Context(), session.UserID, session.ChallengeID)
+				}
+				if !hasAttempted {
+					scoreEarned = session.ChallengeScore
+				} else {
+					log.Printf("[EVALUATION] User %s has already attempted %s. No score awarded.\n", session.UserID, session.ChallengeID)
+				}
 			}
 
 			// Save the attempt to Firestore

@@ -3,8 +3,57 @@ package api
 import (
 	"devops-lab-backend/internal/k8s"
 	"encoding/json"
+	"log"
 	"net/http"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// GetClusterStatusWS handles WebSocket connections for real-time cluster status updates
+// WS /api/cluster/status/ws
+func GetClusterStatusWS(k8sClient *k8s.K8sClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("Failed to upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if k8sClient == nil || k8sClient.ClusterMgr == nil {
+			conn.WriteJSON(map[string]interface{}{
+				"name":   "",
+				"status": "UNAVAILABLE",
+				"error":  "K8s infrastructure is not initialized",
+			})
+			return
+		}
+
+		for {
+			name, status, err := k8sClient.ClusterMgr.GetClusterStatus(r.Context())
+			if err != nil {
+				conn.WriteJSON(map[string]interface{}{
+					"name":   "",
+					"status": "OFFLINE",
+					"error":  err.Error(),
+				})
+			} else {
+				if err := conn.WriteJSON(map[string]interface{}{
+					"name":   name,
+					"status": status,
+				}); err != nil {
+					break // client disconnected
+				}
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+}
 
 // CreateClusterHandler initiates manual cluster creation (Admin only)
 // POST /api/cluster/create

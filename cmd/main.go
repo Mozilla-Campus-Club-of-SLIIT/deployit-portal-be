@@ -21,8 +21,19 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		// Log every request to help with debugging on Cloud Run
 		log.Printf("[REQ] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
+		// Set Strict Security Headers
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+
 		// Set CORS headers
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		allowedOrigin := os.Getenv("ALLOWED_ORIGINS")
+		if allowedOrigin == "" {
+			allowedOrigin = "*" // Fallback, but should be restricted in Prod
+		}
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, PATCH")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Max-Age", "86400")
@@ -73,8 +84,8 @@ func main() {
 				if count > 0 {
 					log.Printf("[MAINTENANCE] Cleaned up %d expired namespaces", count)
 				}
-				// Warm node strategy: keep cluster for 45min idle to save startup time for next students
-				_ = k8sClient.DeleteClusterIfIdle(ctx, 45)
+				// Warm node strategy: keep cluster for 15min idle to save startup time for next students
+				_ = k8sClient.DeleteClusterIfIdle(ctx, 15)
 			}
 		}()
 	}
@@ -101,7 +112,10 @@ func main() {
 	mux.HandleFunc("/api/challenges/add", api.RequireAdmin(api.AddChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/toggle", api.RequireAdmin(api.ToggleChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/challenges/delete", api.RequireAdmin(api.DeleteChallengeHandler(firestoreClient)))
+	mux.HandleFunc("/api/admins", api.RequireAdmin(api.ListAdminsHandler(firestoreClient)))
+	mux.HandleFunc("/api/admins/add", api.RequireAdmin(api.CreateAdminHandler(firestoreClient)))
 	mux.HandleFunc("/api/cluster/status", api.RequireAdmin(api.GetClusterStatusHandler(k8sClient)))
+	mux.HandleFunc("/api/cluster/status/ws", api.GetClusterStatusWS(k8sClient))
 	mux.HandleFunc("/api/cluster/create", api.RequireAdmin(api.CreateClusterHandler(k8sClient)))
 	mux.HandleFunc("/api/cluster/delete", api.RequireAdmin(api.DeleteClusterHandler(k8sClient)))
 	mux.HandleFunc("/api/sessions", api.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {

@@ -173,7 +173,8 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 					fmt.Sprintf("%s\ntail -f /dev/null", config.StartupScript),
 				},
 				SecurityContext: &corev1.SecurityContext{
-					Privileged: boolPtr(true),
+					Privileged:               boolPtr(false),
+					AllowPrivilegeEscalation: boolPtr(false),
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
@@ -212,6 +213,10 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 						"curl -fsSL -L -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 && " +
 						"chmod +x /usr/local/bin/ttyd && " +
 						"ttyd -W -p 9000 bash -c \"echo 'Connecting to lab environment...'; kubectl exec -it $POD_NAME -c challenge-container -- bash || kubectl exec -it $POD_NAME -c challenge-container -- sh\"",
+				},
+				SecurityContext: &corev1.SecurityContext{
+					Privileged:               boolPtr(false),
+					AllowPrivilegeEscalation: boolPtr(false),
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{

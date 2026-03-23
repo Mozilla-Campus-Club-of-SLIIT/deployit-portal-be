@@ -60,6 +60,7 @@ type User struct {
 	OTPCode      string    `firestore:"otpCode" json:"-"`
 	OTPExpiry    time.Time `firestore:"otpExpiry" json:"-"`
 	Verified     bool      `firestore:"verified" json:"verified"`
+	University   string    `firestore:"university" json:"university"`
 }
 
 type FirestoreClient struct {
@@ -130,13 +131,13 @@ func (fc *FirestoreClient) GetChallenge(ctx context.Context, id string) (*Challe
 	}
 	if challenge.IsK8s {
 		if challenge.CPUQuota == "" {
-			challenge.CPUQuota = "500m"
+			challenge.CPUQuota = "200m"
 		}
 		if challenge.MemoryQuota == "" {
-			challenge.MemoryQuota = "512Mi"
+			challenge.MemoryQuota = "256Mi"
 		}
 		if challenge.PodQuota == "" {
-			challenge.PodQuota = "10"
+			challenge.PodQuota = "5"
 		}
 	}
 	return &challenge, nil
@@ -211,7 +212,7 @@ func (fc *FirestoreClient) DeleteChallenge(ctx context.Context, id string) error
 }
 
 // CreateUser saves a new user to Firestore
-func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, displayName string, passwordHash string) (*User, error) {
+func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, displayName string, passwordHash string, university string) (*User, error) {
 	// Check if user already exists
 	existing, _ := fc.GetUserByEmail(ctx, email)
 	if existing != nil {
@@ -224,6 +225,7 @@ func (fc *FirestoreClient) CreateUser(ctx context.Context, email string, display
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: passwordHash,
+		University:   university,
 		CreatedAt:    time.Now(),
 		Role:         "user",
 		Verified:     false,
@@ -365,6 +367,21 @@ func (fc *FirestoreClient) ListAttempts(ctx context.Context, userID string) ([]C
 	return attempts, nil
 }
 
+// HasAttemptedChallenge checks if a user has already successfully attempted a specific challenge
+func (fc *FirestoreClient) HasAttemptedChallenge(ctx context.Context, userID, challengeID string) (bool, error) {
+	docs, err := fc.client.Collection("attempts").
+		Where("userId", "==", userID).
+		Where("challengeId", "==", challengeID).
+		Where("result", "==", "SUCCESS").
+		Limit(1).
+		Documents(ctx).GetAll()
+
+	if err != nil {
+		return false, err
+	}
+	return len(docs) > 0, nil
+}
+
 // ListUsers retrieves all users from Firestore
 func (fc *FirestoreClient) ListUsers(ctx context.Context) ([]User, error) {
 	docs, err := fc.client.Collection("users").Documents(ctx).GetAll()
@@ -387,6 +404,31 @@ func (fc *FirestoreClient) ListUsers(ctx context.Context) ([]User, error) {
 	})
 
 	return users, nil
+}
+
+// ListAdmins retrieves all admin accounts from the dedicated admins collection
+func (fc *FirestoreClient) ListAdmins(ctx context.Context) ([]User, error) {
+	docs, err := fc.client.Collection("admins").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	var admins []User
+	for _, doc := range docs {
+		var u User
+		if err := doc.DataTo(&u); err != nil {
+			continue
+		}
+		u.Role = "admin" // Ensure role is set
+		admins = append(admins, u)
+	}
+
+	// Sort by creation time descending
+	sort.Slice(admins, func(i, j int) bool {
+		return admins[i].CreatedAt.After(admins[j].CreatedAt)
+	})
+
+	return admins, nil
 }
 
 // SetOTP saves an OTP code for a user inside a given collection
