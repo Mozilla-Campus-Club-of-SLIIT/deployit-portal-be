@@ -184,7 +184,25 @@ NS_SUCCESS:
 				Command: []string{"/bin/sh", "-c"},
 				Args: []string{
 					fmt.Sprintf(`export TERM=xterm-256color; export LANG=C.UTF-8; export LC_ALL=C.UTF-8
-# 1. Provide a systemctl shim (for users used to systemd)
+# 1. Provide service/systemctl shims for minimal container images
+cat <<'EOF' > /usr/local/bin/service
+#!/bin/sh
+SERVICE=$1
+ACTION=$2
+if [ -z "$SERVICE" ] || [ -z "$ACTION" ]; then
+	echo "Usage: service <service> {start|stop|restart|status}"
+	exit 1
+fi
+if [ -x "/etc/init.d/$SERVICE" ]; then
+	/etc/init.d/$SERVICE $ACTION
+elif command -v rc-service >/dev/null 2>&1; then
+	rc-service $SERVICE $ACTION
+else
+	echo "Service $SERVICE not found (no init script/rc-service available)."
+	exit 1
+fi
+EOF
+chmod +x /usr/local/bin/service
 cat <<'EOF' > /usr/local/bin/systemctl
 #!/bin/sh
 ACTION=$1
@@ -193,11 +211,7 @@ if [ -z "$SERVICE" ] || [ -z "$ACTION" ]; then
   echo "Usage: systemctl {start|stop|restart|status} {service}"
   exit 1
 fi
-if [ -f "/etc/init.d/$SERVICE" ]; then
-  /etc/init.d/$SERVICE $ACTION
-else
-  service $SERVICE $ACTION 2>/dev/null || echo "Service $SERVICE not found in /etc/init.d/"
-fi
+service $SERVICE $ACTION
 EOF
 chmod +x /usr/local/bin/systemctl
 # 2. Signal readiness immediately
