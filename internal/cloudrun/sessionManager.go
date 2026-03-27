@@ -201,7 +201,7 @@ func (sm *SessionManager) cleanupSessions() {
 	for id, s := range sm.sessions {
 		totalAge := now.Sub(s.CreatedAt)
 		idleAge := now.Sub(s.LastActive)
-		if totalAge > 15*time.Minute || idleAge > 15*time.Minute {
+		if totalAge > 10*time.Minute || idleAge > 10*time.Minute {
 			// Auto delete Cloud Run service over budget
 			go sm.cloudrun.DeleteLabContainer(id)
 			delete(sm.sessions, id)

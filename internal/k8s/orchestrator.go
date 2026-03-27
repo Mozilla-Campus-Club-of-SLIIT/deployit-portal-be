@@ -13,7 +13,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"bytes"
+	"os"
 	"strings"
+	"encoding/base64"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -41,6 +43,7 @@ type ChallengeConfig struct {
 	PodQuota      string
 	Image         string
 	StartupScript string
+	ConfigFiles   map[string]string
 }
 
 func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeConfig) (string, error) {
@@ -70,11 +73,21 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 		},
 	}
 
-	_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	if err != nil {
-		return "", fmt.Errorf("failed to create namespace: %v", err)
+	// 1. Create Namespace (with retry for transient Control Plane timeouts)
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+		if err == nil {
+			log.Printf("[K8S] Namespace %s created (Attempt %d)", config.Namespace, attempt)
+			goto NS_SUCCESS
+		}
+		lastErr = err
+		log.Printf("[K8S] Warning: Namespace creation failed (Attempt %d): %v. Retrying in %ds...", attempt, err, attempt*2)
+		time.Sleep(time.Duration(attempt*2) * time.Second)
 	}
-	log.Printf("[K8S] Namespace %s created", config.Namespace)
+	return "", fmt.Errorf("failed to create namespace after 3 attempts: %v", lastErr)
+
+NS_SUCCESS:
 
 	// 2. Apply Resource Quotas (with headroom for terminal sidecar)
 	// Sidecar uses 200m CPU and 256Mi Memory. We add 500m and 512Mi total headroom.
@@ -170,8 +183,39 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 				// Run startup script if provided, but ALWAYS keep container alive with tail -f /dev/null
 				Command: []string{"/bin/sh", "-c"},
 				Args: []string{
-					fmt.Sprintf("%s\ntail -f /dev/null", config.StartupScript),
+					fmt.Sprintf(`export TERM=xterm-256color; export LANG=C.UTF-8; export LC_ALL=C.UTF-8
+# 1. Provide a systemctl shim (for users used to systemd)
+cat <<'EOF' > /usr/local/bin/systemctl
+#!/bin/sh
+ACTION=$1
+SERVICE=$2
+if [ -z "$SERVICE" ] || [ -z "$ACTION" ]; then
+  echo "Usage: systemctl {start|stop|restart|status} {service}"
+  exit 1
+fi
+if [ -f "/etc/init.d/$SERVICE" ]; then
+  /etc/init.d/$SERVICE $ACTION
+else
+  service $SERVICE $ACTION 2>/dev/null || echo "Service $SERVICE not found in /etc/init.d/"
+fi
+EOF
+chmod +x /usr/local/bin/systemctl
+# 2. Signal readiness immediately
+touch /data/provisioned
+# 3. Link kubectl from sidecar background-ready
+(while [ ! -f /data/kubectl ]; do sleep 0.1; done; ln -sf /data/kubectl /usr/local/bin/kubectl) &
+# 4. Apply Config Files
+%s
+# 5. Run the challenge-specific startup script in the background
+STARTUP_SCRIPT="%s"
+if [ -n "$STARTUP_SCRIPT" ]; then
+  (eval "$STARTUP_SCRIPT") >>/data/provision_log 2>&1 &
+fi
+# 6. Keep container alive
+tail -f /dev/null`, buildK8sConfigFiles(config.ConfigFiles), config.StartupScript),
 				},
+				Stdin: true,
+				TTY:   true,
 				SecurityContext: &corev1.SecurityContext{
 					Privileged:               boolPtr(false),
 					AllowPrivilegeEscalation: boolPtr(false),
@@ -186,6 +230,7 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 						corev1.ResourceMemory: resource.MustParse("64Mi"),
 					},
 				},
+				ImagePullPolicy: corev1.PullIfNotPresent,
 				VolumeMounts: []corev1.VolumeMount{
 					{
 						Name:      "shared-data",
@@ -194,8 +239,19 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 				},
 			},
 			{
-				Name:  "terminal-sidecar",
-				Image: "alpine:latest",
+				Name: "terminal-sidecar",
+				// Pre-baked image is auto-derived from GOOGLE_CLOUD_PROJECT.
+				// Built & pushed by CI: .github/workflows/build-sidecar.yml
+				// Falls back to alpine:latest (installs at runtime) when running locally without GCP.
+				Image: func() string {
+					if img := os.Getenv("K8S_SIDECAR_IMAGE"); img != "" {
+						return img
+					}
+					if proj := os.Getenv("GOOGLE_CLOUD_PROJECT"); proj != "" {
+						return "gcr.io/" + proj + "/deployit-lab-sidecar:latest"
+					}
+					return "alpine:latest"
+				}(),
 				Env: []corev1.EnvVar{
 					{
 						Name: "POD_NAME",
@@ -206,14 +262,24 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 						},
 					},
 				},
-				Ports: []corev1.ContainerPort{{ContainerPort: 9000}},
-				Command: []string{"/bin/sh", "-c"},
-				Args: []string{
-					"apk add --no-cache curl kubectl bash > /dev/null && " +
-						"curl -fsSL -L -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 && " +
-						"chmod +x /usr/local/bin/ttyd && " +
-						"ttyd -W -p 9000 bash -c \"echo 'Connecting to lab environment...'; kubectl exec -it $POD_NAME -c challenge-container -- bash || kubectl exec -it $POD_NAME -c challenge-container -- sh\"",
+				Ports: []corev1.ContainerPort{
+					{ContainerPort: 9000},
+					{ContainerPort: 9001},
+					{ContainerPort: 9002},
 				},
+				Command: []string{"/bin/sh", "-c"},
+				Args: []string{func() string {
+					// Single TTYD command template
+					const ttydBase = `ttyd -W -t disableLeaveAlert=true -t fontSize=14 sh -c "stty sane; kubectl exec -it $POD_NAME -c challenge-container -- sh -c 'export EDITOR=nano; if command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi'"`
+					
+					// Run 3 instances on ports 9000, 9001, 9002
+					script := fmt.Sprintf(`(cp /usr/local/bin/kubectl /data/kubectl) >/dev/null 2>&1
+%s -p 9000 &
+%s -p 9001 &
+%s -p 9002 &
+wait`, ttydBase, ttydBase, ttydBase)
+					return script
+				}()},
 				SecurityContext: &corev1.SecurityContext{
 					Privileged:               boolPtr(false),
 					AllowPrivilegeEscalation: boolPtr(false),
@@ -223,11 +289,10 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 						corev1.ResourceCPU:    resource.MustParse("50m"),
 						corev1.ResourceMemory: resource.MustParse("128Mi"),
 					},
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("10m"),
-						corev1.ResourceMemory: resource.MustParse("64Mi"),
-					},
 				},
+				Stdin: true,
+				TTY:   true,
+				ImagePullPolicy: corev1.PullIfNotPresent,
 				VolumeMounts: []corev1.VolumeMount{
 					{
 						Name:      "shared-data",
@@ -240,8 +305,9 @@ func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeCon
 							Port: intstr.FromInt(9000),
 						},
 					},
-					InitialDelaySeconds: 5,
-					PeriodSeconds:       2,
+					InitialDelaySeconds: 20, // Huge increase: ttyd wget download can take 15s on slow node initializations
+					PeriodSeconds:       5,
+					FailureThreshold:    6, 
 				},
 			},
 		},
@@ -347,17 +413,32 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 						break
 					}
 				}
+				// Check if any container has actually crashed
+				for _, stat := range pod.Status.ContainerStatuses {
+					if stat.State.Terminated != nil && stat.State.Terminated.ExitCode != 0 {
+						return "", fmt.Errorf("container %s crashed: %s (exit %d)", 
+							stat.Name, stat.State.Terminated.Reason, stat.State.Terminated.ExitCode)
+					}
+				}
+
 				if terminalReady {
+					log.Printf("[K8S] Pod ready in %s. Terminal is now accessible.", namespace)
 					return pod.Name, nil
 				}
-				log.Printf("[K8S] Pod Running, waiting for terminal-sidecar on port 8080...")
+				
+				// Log why it's not ready (e.g., ImagePulling, ContainerCreating)
+				for _, stat := range pod.Status.ContainerStatuses {
+					if !stat.Ready && stat.State.Waiting != nil {
+						log.Printf("[K8S] Container %s: %s - %s", stat.Name, stat.State.Waiting.Reason, stat.State.Waiting.Message)
+					}
+				}
 			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			// continue loop
 		}
 	}
@@ -439,7 +520,7 @@ func (c *K8sClient) EvaluateScript(ctx context.Context, namespace, script string
 		return "", err
 	}
 
-	cmd := []string{"bash", "-c", script}
+	cmd := []string{"sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi", "--", script}
 
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -471,13 +552,18 @@ func (c *K8sClient) EvaluateScript(ctx context.Context, namespace, script string
 		return output, fmt.Errorf("script execution failed: %v", err)
 	}
 
-	lines := strings.Split(output, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line, nil
-		}
-	}
-	return "", nil
+	return strings.TrimSpace(output), nil
 }
 func boolPtr(b bool) *bool { return &b }
+
+func buildK8sConfigFiles(files map[string]string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var script strings.Builder
+	for path, content := range files {
+		b64 := base64.StdEncoding.EncodeToString([]byte(content))
+		script.WriteString(fmt.Sprintf("mkdir -p $(dirname '%s') && base64 -d << 'EOF_B64' > '%s'\n%s\nEOF_B64\n", path, path, b64))
+	}
+	return script.String()
+}

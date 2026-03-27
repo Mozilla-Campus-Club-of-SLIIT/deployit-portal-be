@@ -142,10 +142,22 @@ func (c *CloudRunClient) CreateLabContainer(sessionID string, config *LabConfig)
 
 	startupCmd += `
 # --- 1. CORE DEPENDENCIES & SIDECAR BINARIES ---
-apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl wget ca-certificates procps nano vim
+if command -v apt-get >/dev/null 2>&1; then
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl wget ca-certificates procps nano vim sudo
+elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache python3 curl wget ca-certificates procps nano vim bash sudo
+fi
+
+# Ensure sudo exists (shim for minimal images or where install fails)
+if ! command -v sudo >/dev/null 2>&1; then
+    echo '#!/bin/sh' > /usr/bin/sudo
+    echo 'exec "$@"' >> /usr/bin/sudo
+    chmod +x /usr/bin/sudo
+fi
+
 curl -sSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64"
 chmod +x /usr/bin/caddy
-curl -sSL -o /usr/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" || apt-get install -y ttyd
+curl -sSL -o /usr/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" || (command -v apt-get >/dev/null && apt-get install -y ttyd) || (command -v apk >/dev/null && apk add ttyd)
 chmod +x /usr/bin/ttyd
 
 # --- 2. CHALLENGE STARTUP SCRIPT ---
@@ -177,7 +189,10 @@ class EvalHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pass
             
-            result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+            # Use bash if available, else sh
+            bash_check = subprocess.run(['which', 'bash'], capture_output=True)
+            shell = 'bash' if bash_check.returncode == 0 else 'sh'
+            result = subprocess.run([shell, '-c', script], capture_output=True, text=True)
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -207,7 +222,8 @@ EOF
 
 # Start Python API and ttyd terminal in background
 python3 /tmp/eval_api.py &
-/usr/bin/ttyd -p 8082 -W bash &
+# Start ttyd with bash if available, else sh. Added -t disableLeaveAlert=true to prevent browser interception.
+/usr/bin/ttyd -p 8082 -W -t disableLeaveAlert=true sh -c "stty sane; if command -v bash >/dev/null 2>&1; then exec bash -li; else exec sh -i; fi" &
 
 # Start Caddy as the main responsive container process
 exec /usr/bin/caddy run --config /tmp/Caddyfile
@@ -238,7 +254,7 @@ exec /usr/bin/caddy run --config /tmp/Caddyfile
 						Resources: &runpb.ResourceRequirements{
 							Limits: map[string]string{
 								"cpu":    "1000m",
-								"memory": "512Mi",
+								"memory": "1024Mi", // Increased to prevent OutOfMemory crashes
 							},
 							CpuIdle: true, // Explicitly request-based billing
 						},

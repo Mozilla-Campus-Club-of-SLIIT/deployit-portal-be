@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/api/container/v1"
@@ -26,6 +27,7 @@ type ClusterManager struct {
 	clientset  *kubernetes.Clientset
 	lastActive time.Time
 	isCreating bool
+	mu         sync.RWMutex
 }
 
 func NewClusterManager(ctx context.Context) (*ClusterManager, error) {
@@ -63,27 +65,44 @@ func NewClusterManager(ctx context.Context) (*ClusterManager, error) {
 }
 
 func (cm *ClusterManager) GetClientset(ctx context.Context) (*kubernetes.Clientset, error) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
 	if cm.clientset != nil {
-		cm.lastActive = time.Now()
-		return cm.clientset, nil
+		// Ping cluster with a small heartbeat to verify cached endpoint is still alive
+		_, pingErr := cm.clientset.Discovery().ServerVersion()
+		
+		if pingErr == nil {
+			cm.lastActive = time.Now()
+			return cm.clientset, nil
+		}
+		
+		log.Printf("[GKE] Cached clientset is stale or unreachable: %v. Refreshing...", pingErr)
+		cm.clientset = nil // Clear stale cache
 	}
 
 	// Check if an active cluster already exists in the region
 	cluster, err := cm.findActiveCluster(ctx)
 	if err != nil {
 		if cm.isCreating {
-			return nil, fmt.Errorf("cluster is currently being provisioned")
+			return nil, fmt.Errorf("cluster is currently cold-starting")
 		}
 		return nil, fmt.Errorf("no active cluster found")
 	}
 
-	if cluster.Status == "PROVISIONING" || cluster.Status == "RECONCILING" {
+	// Cold-start check
+	if cluster.Status == "PROVISIONING" {
 		cm.isCreating = true
-		return nil, fmt.Errorf("cluster is currently being provisioned")
+		return nil, fmt.Errorf("cluster is currently cold-starting")
 	}
 
-	if cluster.Status != "RUNNING" {
-		return nil, fmt.Errorf("cluster is in status: %s", cluster.Status)
+	// If it's RECONCILING or RUNNING, we check if it has a valid endpoint and cert
+	if cluster.Endpoint == "" || cluster.MasterAuth == nil || cluster.MasterAuth.ClusterCaCertificate == "" {
+		if cluster.Status == "RECONCILING" {
+			cm.isCreating = true
+			return nil, fmt.Errorf("cluster is currently cold-starting (endpoint not ready)")
+		}
+		return nil, fmt.Errorf("cluster is in status: %s (no endpoint)", cluster.Status)
 	}
 
 	// Cluster is running, build clientset
@@ -128,19 +147,16 @@ func (cm *ClusterManager) ManualCreateCluster(ctx context.Context) error {
 			NodePools: []*container.NodePool{
 				{
 					Name:             "default-pool",
-					InitialNodeCount: 1,
+					InitialNodeCount: 3, // Ready for 60+ concurrent users (6 vCPUs + 24GB RAM)
 					Autoscaling: &container.NodePoolAutoscaling{
 						Enabled:      true,
 						MinNodeCount: 1,
-						MaxNodeCount: 5, // Scale up to 5 nodes if needed
+						MaxNodeCount: 15, // Cap at 15 * 2 = 30 vCPUs (Strictly under 32-CPU quota)
 					},
 					Config: &container.NodeConfig{
-						MachineType: "e2-medium",
-						Spot:        true,
-						Labels: map[string]string{
-							"cloud.google.com/gke-spot": "true",
-						},
-						DiskSizeGb: 20, // Reduce from default 100GB to save disk cost
+						MachineType: "e2-standard-2", // Upgraded hardware to fit more pods per node
+						Spot:        false,           // Guaranteed capacity for students
+						DiskSizeGb:  30,              // Slightly increased for larger image caching
 					},
 				},
 			},
@@ -273,6 +289,8 @@ func (cm *ClusterManager) buildConfig(c *container.Cluster) (*rest.Config, error
 		TLSClientConfig: rest.TLSClientConfig{
 			CAData: cap,
 		},
+		QPS:   200, // Handle high concurrency load
+		Burst: 400, // Handle high burst spikes
 	}
 
 	// Wrapper to inject the dynamic token into the transport

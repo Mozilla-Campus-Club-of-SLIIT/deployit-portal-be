@@ -51,7 +51,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			resp := StartLabResponse{
 				SessionID:   session.SessionID,
 				URL:         session.URL,
-				TimeLimit:   timeLimit,
+				TimeLimit:   min(timeLimit, 600),
 				ChallengeID: session.ChallengeID,
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -97,12 +97,13 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 				Namespace:     namespace,
 				ChallengeID:   req.LabType,
 				UserID:        req.UserID,
-				ExpiryHours:   0.5, // Reduce to 30 minutes for cost saving
+				ExpiryHours:   0.17, // Cap at 10 minutes (1/6 hours)
 				CPUQuota:      challenge.CPUQuota,
 				MemoryQuota:   challenge.MemoryQuota,
 				PodQuota:      challenge.PodQuota,
 				Image:         challenge.Image,
 				StartupScript: challenge.StartupScript,
+				ConfigFiles:   challenge.ConfigFiles,
 			})
 			// In a real system, the URL would be the web terminal ingress for that namespace
 			// Return a proxy URL through our own backend to reach the K8s pod
@@ -144,7 +145,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 		resp := StartLabResponse{
 			SessionID:   session.SessionID,
 			URL:         url,
-			TimeLimit:   challenge.TimeLimit,
+			TimeLimit:   min(challenge.TimeLimit, 600),
 			ChallengeID: req.LabType,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -170,7 +171,7 @@ func GetCurrentSessionHandler(sm *cloudrun.SessionManager, dbClient *db.Firestor
 			resp := StartLabResponse{
 				SessionID:   session.SessionID,
 				URL:         session.URL,
-				TimeLimit:   timeLimit,
+				TimeLimit:   min(timeLimit, 600),
 				ChallengeID: session.ChallengeID,
 			}
 			w.Header().Set("Content-Type", "application/json")

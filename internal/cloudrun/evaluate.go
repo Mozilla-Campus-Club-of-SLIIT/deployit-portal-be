@@ -64,14 +64,5 @@ func EvaluateScript(labURL string, script string) (string, error) {
 
 	log.Printf("[EVAL] API Success. Output:\n%s", evalResp.Stdout)
 
-	// Convention: Return the last non-empty line of stdout
-	lines := strings.Split(evalResp.Stdout, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line, nil
-		}
-	}
-
-	return "", nil
+	return strings.TrimSpace(evalResp.Stdout), nil
 }

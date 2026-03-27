@@ -43,7 +43,7 @@ func (dc *DockerClient) CreateLabContainer(hostPort int) (string, int, error) {
 
 	// Install ttyd and run it
 	// Install ttyd and run it (static binary for reliability)
-	cmd := []string{"bash", "-c", "set -e; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends wget ca-certificates; wget -O /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64; chmod +x /usr/local/bin/ttyd; export TERM=xterm-256color; exec ttyd -p 7681 -o bash -i"}
+	cmd := []string{"bash", "-c", "set -e; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends wget ca-certificates nano vim sudo procps; wget -O /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64; chmod +x /usr/local/bin/ttyd; export TERM=xterm-256color; export LANG=C.UTF-8; export LC_ALL=C.UTF-8; stty sane; exec /usr/local/bin/ttyd -p 7681 -W -t disableLeaveAlert=true bash -li"}
 
 	config := &container.Config{
 		Image: image,

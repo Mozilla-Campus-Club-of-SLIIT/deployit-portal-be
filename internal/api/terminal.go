@@ -48,13 +48,22 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 		}
 		log.Printf("[TERMINAL] Found pod: %s for session %s", podName, sessionID)
 
+		// 0-indexed terminal ID (0, 1, or 2)
+		terminalID := r.URL.Query().Get("terminal")
+		port := 9000
+		if terminalID == "1" {
+			port = 9001
+		} else if terminalID == "2" {
+			port = 9002
+		}
+
 		config, err := kc.GetRestConfig(r.Context())
 		if err != nil {
 			log.Printf("[TERMINAL] K8s config retrieval failed: %v", err)
 			http.Error(w, "K8s config error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("[TERMINAL] GKE API Host: %s", config.Host)
+		log.Printf("[TERMINAL] GKE API Host: %s, Terminal: %d", config.Host, port)
 
 		// Create the proxy to the API server's pod proxy endpoint
 		// Format: https://{host}/api/v1/namespaces/{ns}/pods/{pod}:8080/proxy/
@@ -76,7 +85,7 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 
 		// Handle WebSocket upgrade
 		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
-			proxyWebSocket(w, r, config, sessionID, session.Namespace, podName)
+			proxyWebSocket(w, r, config, sessionID, session.Namespace, podName, port)
 			return
 		}
 
@@ -92,17 +101,17 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 
 			req.URL.Scheme = "https"
 			req.URL.Host = target.Host
-			req.URL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:9000/proxy%s", 
-				session.Namespace, podName, subpath)
+			req.URL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%d/proxy%s", 
+				session.Namespace, podName, port, subpath)
 			req.Host = target.Host
-			log.Printf("[TERMINAL] Proxying HTTP to: %s", req.URL.String())
+			log.Printf("[TERMINAL] Proxying HTTP to Port %d: %s", port, req.URL.String())
 		}
 
 		proxy.ServeHTTP(w, r)
 	}
 }
 
-func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config, sessionID, ns, podName string) {
+func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config, sessionID, ns, podName string, port int) {
 	// Extract the subpath after /api/terminal/{id}
 	idx := strings.Index(r.URL.Path, "/api/terminal/"+sessionID)
 	subpath := "/"
@@ -116,13 +125,13 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config,
 		subpath = "/" + subpath
 	}
 
-	// GKE API Server WebSocket proxy path to sidecar on port 9000
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:9000/proxy%s", ns, podName, subpath)
+	// GKE API Server WebSocket proxy path to sidecar on port 9000/9001/9002
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%d/proxy%s", ns, podName, port, subpath)
 	
 	targetURL, _ := url.Parse(config.Host)
 	targetURL.Path = path
 
-	log.Printf("[TERMINAL] Hijacking for WebSocket proxy to: %s", targetURL.String())
+	log.Printf("[TERMINAL] Hijacking for WebSocket proxy to Port %d: %s", port, targetURL.String())
 
 	// For GKE, we need to handle the WebSocket proxying carefully.
 	// Since httputil.ReverseProxy doesn't naturally support hijacking for all K8s versions,
@@ -143,7 +152,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config,
 			if config.BearerToken != "" {
 				out.Header.Set("Authorization", "Bearer "+config.BearerToken)
 			}
-			log.Printf("[TERMINAL] WS Director: %s %s", out.Method, out.URL.String())
+			log.Printf("[TERMINAL] WS Director (Port %d): %s %s", port, out.Method, out.URL.String())
 		},
 		Transport: transport,
 		// Disable buffering to allow real-time terminal stream
