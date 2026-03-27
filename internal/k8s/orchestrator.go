@@ -269,8 +269,8 @@ tail -f /dev/null`, buildK8sConfigFiles(config.ConfigFiles), config.StartupScrip
 				},
 				Command: []string{"/bin/sh", "-c"},
 				Args: []string{func() string {
-					// Single TTYD command template
-					const ttydBase = `ttyd -W -t disableLeaveAlert=true -t fontSize=14 sh -c "stty sane; kubectl exec -it $POD_NAME -c challenge-container -- sh -c 'export EDITOR=nano; if command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi'"`
+					// Bind explicitly to all interfaces so kubelet TCP readiness probe can reach ttyd.
+					const ttydBase = `ttyd -i 0.0.0.0 -W -t disableLeaveAlert=true -t fontSize=14 sh -c "stty sane; kubectl exec -it $POD_NAME -c challenge-container -- sh -c 'export EDITOR=nano; if command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi'"`
 					
 					// Run 3 instances on ports 9000, 9001, 9002
 					script := fmt.Sprintf(`(cp /usr/local/bin/kubectl /data/kubectl) >/dev/null 2>&1
@@ -389,6 +389,11 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 		return "", err
 	}
 
+	strictTerminalReadiness := true
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("K8S_REQUIRE_TERMINAL_READY"))); v == "false" || v == "0" || v == "no" {
+		strictTerminalReadiness = false
+	}
+
 	log.Printf("[K8S] Searching for pods in %s with selector %s (max 300s)...", namespace, labelSelector)
 
 	// Retry for up to 300 seconds to find a running pod
@@ -405,12 +410,18 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 			pod := pods.Items[0]
 			log.Printf("[K8S] [Attempt %d] Found pod %s in state %s", i+1, pod.Name, pod.Status.Phase)
 			if pod.Status.Phase == corev1.PodRunning {
-				// Check ONLY the terminal sidecar status
+				challengeRunning := false
+				terminalFound := false
 				terminalReady := false
 				for _, stat := range pod.Status.ContainerStatuses {
-					if stat.Name == "terminal-sidecar" && stat.Ready {
-						terminalReady = true
-						break
+					if stat.Name == "challenge-container" && stat.State.Running != nil {
+						challengeRunning = true
+					}
+					if stat.Name == "terminal-sidecar" {
+						terminalFound = true
+						if stat.Ready {
+							terminalReady = true
+						}
 					}
 				}
 				// Check if any container has actually crashed
@@ -425,11 +436,22 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 					log.Printf("[K8S] Pod ready in %s. Terminal is now accessible.", namespace)
 					return pod.Name, nil
 				}
+
+				if !strictTerminalReadiness && challengeRunning {
+					if terminalFound {
+						log.Printf("[K8S] Pod ready in %s (relaxed mode): challenge container running; terminal sidecar still warming.", namespace)
+					} else {
+						log.Printf("[K8S] Pod ready in %s (relaxed mode): challenge container running.", namespace)
+					}
+					return pod.Name, nil
+				}
 				
 				// Log why it's not ready (e.g., ImagePulling, ContainerCreating)
 				for _, stat := range pod.Status.ContainerStatuses {
 					if !stat.Ready && stat.State.Waiting != nil {
 						log.Printf("[K8S] Container %s: %s - %s", stat.Name, stat.State.Waiting.Reason, stat.State.Waiting.Message)
+					} else if !stat.Ready && stat.State.Running != nil {
+						log.Printf("[K8S] Container %s running but not ready yet (restarts=%d)", stat.Name, stat.RestartCount)
 					}
 				}
 			}
