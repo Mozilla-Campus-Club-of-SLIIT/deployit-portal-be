@@ -84,8 +84,8 @@ func main() {
 				if count > 0 {
 					log.Printf("[MAINTENANCE] Cleaned up %d expired namespaces", count)
 				}
-				// Warm node strategy: keep cluster for 15min idle to save startup time for next students
-				_ = k8sClient.DeleteClusterIfIdle(ctx, 15)
+				// Warm node strategy: keep cluster for 45min idle to save startup time for next students
+				_ = k8sClient.DeleteClusterIfIdle(ctx, 45)
 			}
 		}()
 	}
@@ -102,7 +102,7 @@ func main() {
 	mux.HandleFunc("/api/upload-avatar", api.RequireAuth(api.UploadAvatarHandler(firestoreClient)))
 	mux.HandleFunc("/api/send-verification", api.RequireAuth(api.SendVerificationHandler(firestoreClient)))
 	mux.HandleFunc("/api/verify-otp", api.RequireAuth(api.VerifyOtpHandler(firestoreClient)))
-	mux.HandleFunc("/api/current-session", api.RequireAuth(api.GetCurrentSessionHandler(sessionManager, firestoreClient)))
+	mux.HandleFunc("/api/current-session", api.RequireAuth(api.GetCurrentSessionHandler(sessionManager, k8sClient, firestoreClient)))
 	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, k8sClient, firestoreClient)))
 	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient, k8sClient)))
 	mux.HandleFunc("/api/terminal/", api.TerminalProxyHandler(sessionManager, k8sClient))

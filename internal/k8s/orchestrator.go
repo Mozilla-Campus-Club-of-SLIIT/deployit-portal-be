@@ -6,19 +6,19 @@ import (
 	"log"
 	"time"
 
+	"bytes"
+	"encoding/base64"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"bytes"
-	"os"
-	"strings"
-	"encoding/base64"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"os"
+	"strings"
 )
 
 type K8sClient struct {
@@ -44,6 +44,7 @@ type ChallengeConfig struct {
 	Image         string
 	StartupScript string
 	ConfigFiles   map[string]string
+	EnvVars       map[string]string
 }
 
 func (c *K8sClient) ProvisionChallenge(ctx context.Context, config *ChallengeConfig) (string, error) {
@@ -174,6 +175,7 @@ NS_SUCCESS:
 	}
 
 	// 4. Deploy Challenge Resources with Terminal Sidecar
+	challengeNeedsDocker := isDockerLabImage(config.Image)
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: saName, // Allow terminal to use kubectl
 		Containers: []corev1.Container{
@@ -182,27 +184,10 @@ NS_SUCCESS:
 				Image: config.Image,
 				// Run startup script if provided, but ALWAYS keep container alive with tail -f /dev/null
 				Command: []string{"/bin/sh", "-c"},
+				Env:     mapToEnvVars(config.EnvVars),
 				Args: []string{
 					fmt.Sprintf(`export TERM=xterm-256color; export LANG=C.UTF-8; export LC_ALL=C.UTF-8
-# 1. Provide service/systemctl shims for minimal container images
-cat <<'EOF' > /usr/local/bin/service
-#!/bin/sh
-SERVICE=$1
-ACTION=$2
-if [ -z "$SERVICE" ] || [ -z "$ACTION" ]; then
-	echo "Usage: service <service> {start|stop|restart|status}"
-	exit 1
-fi
-if [ -x "/etc/init.d/$SERVICE" ]; then
-	/etc/init.d/$SERVICE $ACTION
-elif command -v rc-service >/dev/null 2>&1; then
-	rc-service $SERVICE $ACTION
-else
-	echo "Service $SERVICE not found (no init script/rc-service available)."
-	exit 1
-fi
-EOF
-chmod +x /usr/local/bin/service
+# 1. Provide a systemctl shim (for users used to systemd)
 cat <<'EOF' > /usr/local/bin/systemctl
 #!/bin/sh
 ACTION=$1
@@ -211,28 +196,49 @@ if [ -z "$SERVICE" ] || [ -z "$ACTION" ]; then
   echo "Usage: systemctl {start|stop|restart|status} {service}"
   exit 1
 fi
-service $SERVICE $ACTION
+if [ -f "/etc/init.d/$SERVICE" ]; then
+  /etc/init.d/$SERVICE $ACTION
+else
+  service $SERVICE $ACTION 2>/dev/null || echo "Service $SERVICE not found in /etc/init.d/"
+fi
 EOF
 chmod +x /usr/local/bin/systemctl
+# 1b. Provide a sudo shim (containers run as root in labs)
+cat <<'EOF' > /usr/local/bin/sudo
+#!/bin/sh
+exec "$@"
+EOF
+chmod +x /usr/local/bin/sudo
 # 2. Signal readiness immediately
 touch /data/provisioned
 # 3. Link kubectl from sidecar background-ready
 (while [ ! -f /data/kubectl ]; do sleep 0.1; done; ln -sf /data/kubectl /usr/local/bin/kubectl) &
-# 4. Apply Config Files
+# 4. Start Docker daemon for Docker labs (Docker-in-Docker)
+if command -v dockerd >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+  mkdir -p /var/lib/docker
+  (dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs >>/data/dockerd.log 2>&1 &) || true
+  for i in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+fi
+# 5. Apply Config Files
 %s
-# 5. Run the challenge-specific startup script in the background
+# 6. Run the challenge-specific startup script in the background
 STARTUP_SCRIPT="%s"
 if [ -n "$STARTUP_SCRIPT" ]; then
   (eval "$STARTUP_SCRIPT") >>/data/provision_log 2>&1 &
 fi
-# 6. Keep container alive
+# 7. Keep container alive
 tail -f /dev/null`, buildK8sConfigFiles(config.ConfigFiles), config.StartupScript),
 				},
 				Stdin: true,
 				TTY:   true,
 				SecurityContext: &corev1.SecurityContext{
-					Privileged:               boolPtr(false),
-					AllowPrivilegeEscalation: boolPtr(false),
+					Privileged:               boolPtr(challengeNeedsDocker),
+					AllowPrivilegeEscalation: boolPtr(challengeNeedsDocker),
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
@@ -284,14 +290,19 @@ tail -f /dev/null`, buildK8sConfigFiles(config.ConfigFiles), config.StartupScrip
 				Command: []string{"/bin/sh", "-c"},
 				Args: []string{func() string {
 					// Bind explicitly to all interfaces so kubelet TCP readiness probe can reach ttyd.
-					const ttydBase = `ttyd -i 0.0.0.0 -W -t disableLeaveAlert=true -t fontSize=14 sh -c "stty sane; kubectl exec -it $POD_NAME -c challenge-container -- sh -c 'export EDITOR=nano; if command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi'"`
-					
-					// Run 3 instances on ports 9000, 9001, 9002
+					const ttydBase = `ttyd -i 0.0.0.0 -W -t disableLeaveAlert=true -t fontSize=14 -p %d sh -c "stty sane; kubectl exec -it $POD_NAME -c challenge-container -- sh -c 'export EDITOR=nano; if command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi'"`
+
+					// Run 3 instances on ports 9000, 9001, 9002.
+					// NOTE: ttyd options must appear before the command; otherwise -p is treated as shell args.
 					script := fmt.Sprintf(`(cp /usr/local/bin/kubectl /data/kubectl) >/dev/null 2>&1
-%s -p 9000 &
-%s -p 9001 &
-%s -p 9002 &
-wait`, ttydBase, ttydBase, ttydBase)
+%s &
+%s &
+%s &
+wait`,
+						fmt.Sprintf(ttydBase, 9000),
+						fmt.Sprintf(ttydBase, 9001),
+						fmt.Sprintf(ttydBase, 9002),
+					)
 					return script
 				}()},
 				SecurityContext: &corev1.SecurityContext{
@@ -304,8 +315,8 @@ wait`, ttydBase, ttydBase, ttydBase)
 						corev1.ResourceMemory: resource.MustParse("128Mi"),
 					},
 				},
-				Stdin: true,
-				TTY:   true,
+				Stdin:           true,
+				TTY:             true,
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				VolumeMounts: []corev1.VolumeMount{
 					{
@@ -321,7 +332,7 @@ wait`, ttydBase, ttydBase, ttydBase)
 					},
 					InitialDelaySeconds: 20, // Huge increase: ttyd wget download can take 15s on slow node initializations
 					PeriodSeconds:       5,
-					FailureThreshold:    6, 
+					FailureThreshold:    6,
 				},
 			},
 		},
@@ -375,7 +386,7 @@ wait`, ttydBase, ttydBase, ttydBase)
 			Selector: map[string]string{"app": "challenge-app"},
 			Ports: []corev1.ServicePort{
 				{
-					Port: 80,
+					Port:       80,
 					TargetPort: intstr.FromInt(8080),
 				},
 			},
@@ -385,16 +396,22 @@ wait`, ttydBase, ttydBase, ttydBase)
 	if err != nil {
 		return "", fmt.Errorf("failed to create terminal service: %v", err)
 	}
-	log.Printf("[K8S] Resources successfully provisioned in %s. Waiting for pod readiness...", config.Namespace)
+	log.Printf("[K8S] Resources successfully provisioned in %s. Waiting for challenge pod startup...", config.Namespace)
 
-	// 6. BLOCK until pod is ready (up to 60s)
-	_, err = c.FindPod(ctx, config.Namespace, "app=challenge-app")
+	// 6. Wait only for challenge container startup.
+	// Terminal accessibility is checked by /api/current-session and terminal proxy paths.
+	_, err = c.WaitForChallengePodRunning(ctx, config.Namespace, "app=challenge-app")
 	if err != nil {
 		return "", fmt.Errorf("pod readiness timeout: %v", err)
 	}
-	log.Printf("[K8S] Pod ready in %s. Lab is now accessible.", config.Namespace)
+	log.Printf("[K8S] Challenge pod running in %s. Terminal may still be warming.", config.Namespace)
 
 	return config.Namespace, nil
+}
+
+func isDockerLabImage(image string) bool {
+	img := strings.ToLower(strings.TrimSpace(image))
+	return strings.Contains(img, "deployit-lab-sidecar")
 }
 
 func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector string) (string, error) {
@@ -415,7 +432,7 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 		pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: labelSelector,
 		})
-		
+
 		if err != nil {
 			log.Printf("[K8S] [Attempt %d] Error listing pods: %v", i+1, err)
 		} else if len(pods.Items) == 0 {
@@ -441,7 +458,7 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 				// Check if any container has actually crashed
 				for _, stat := range pod.Status.ContainerStatuses {
 					if stat.State.Terminated != nil && stat.State.Terminated.ExitCode != 0 {
-						return "", fmt.Errorf("container %s crashed: %s (exit %d)", 
+						return "", fmt.Errorf("container %s crashed: %s (exit %d)",
 							stat.Name, stat.State.Terminated.Reason, stat.State.Terminated.ExitCode)
 					}
 				}
@@ -459,7 +476,7 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 					}
 					return pod.Name, nil
 				}
-				
+
 				// Log why it's not ready (e.g., ImagePulling, ContainerCreating)
 				for _, stat := range pod.Status.ContainerStatuses {
 					if !stat.Ready && stat.State.Waiting != nil {
@@ -480,6 +497,89 @@ func (c *K8sClient) FindPod(ctx context.Context, namespace string, labelSelector
 	}
 
 	return "", fmt.Errorf("timeout waiting for running and ready pod with selector %s in %s", labelSelector, namespace)
+}
+
+// WaitForChallengePodRunning waits until the challenge container is running.
+// This is used during provisioning so session creation can proceed while ttyd still warms up.
+func (c *K8sClient) WaitForChallengePodRunning(ctx context.Context, namespace string, labelSelector string) (string, error) {
+	clientset, err := c.ClusterMgr.GetClientset(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf("[K8S] Waiting for challenge container startup in %s with selector %s (max 300s)...", namespace, labelSelector)
+
+	for i := 0; i < 300; i++ {
+		pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+		if err != nil {
+			log.Printf("[K8S] [Attempt %d] Error listing pods: %v", i+1, err)
+		} else if len(pods.Items) == 0 {
+			log.Printf("[K8S] [Attempt %d] No pods found in namespace %s yet...", i+1, namespace)
+		} else {
+			pod := pods.Items[0]
+			if pod.Status.Phase == corev1.PodRunning {
+				challengeRunning := false
+				for _, stat := range pod.Status.ContainerStatuses {
+					if stat.State.Terminated != nil && stat.State.Terminated.ExitCode != 0 {
+						return "", fmt.Errorf("container %s crashed: %s (exit %d)", stat.Name, stat.State.Terminated.Reason, stat.State.Terminated.ExitCode)
+					}
+					if stat.Name == "challenge-container" && stat.State.Running != nil {
+						challengeRunning = true
+					}
+				}
+				if challengeRunning {
+					return pod.Name, nil
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	return "", fmt.Errorf("timeout waiting for challenge container with selector %s in %s", labelSelector, namespace)
+}
+
+// CheckPodStatus checks the current status of a pod without waiting.
+// Returns true if the pod and terminal are ready, false otherwise.
+func (c *K8sClient) CheckPodStatus(ctx context.Context, namespace string, labelSelector string) (bool, error) {
+	clientset, err := c.ClusterMgr.GetClientset(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+
+	if err != nil {
+		return false, fmt.Errorf("error listing pods: %v", err)
+	}
+
+	if len(pods.Items) == 0 {
+		return false, nil // Pod not found yet
+	}
+
+	pod := pods.Items[0]
+	if pod.Status.Phase != corev1.PodRunning {
+		return false, nil // Pod not running yet
+	}
+
+	// Check container statuses
+	terminalReady := false
+	for _, stat := range pod.Status.ContainerStatuses {
+		if stat.Name == "terminal-sidecar" && stat.Ready {
+			terminalReady = true
+			break
+		}
+	}
+
+	return terminalReady, nil
 }
 
 func (c *K8sClient) GetRestConfig(ctx context.Context) (*rest.Config, error) {
@@ -590,6 +690,18 @@ func (c *K8sClient) EvaluateScript(ctx context.Context, namespace, script string
 
 	return strings.TrimSpace(output), nil
 }
+
+func mapToEnvVars(env map[string]string) []corev1.EnvVar {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make([]corev1.EnvVar, 0, len(env))
+	for k, v := range env {
+		out = append(out, corev1.EnvVar{Name: k, Value: v})
+	}
+	return out
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func buildK8sConfigFiles(files map[string]string) string {

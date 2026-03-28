@@ -1,17 +1,14 @@
 package api
 
 import (
-	"context"
 	"devops-lab-backend/internal/cloudrun"
 	"devops-lab-backend/internal/k8s"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 
 	"k8s.io/client-go/rest"
 )
@@ -86,13 +83,6 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 		}
 		proxy.Transport = rt
 
-		// Guard against transient "connection refused" on sidecar port even after pod discovery.
-		if err := waitForTerminalProxyReady(r.Context(), config.Host, session.Namespace, podName, port, rt); err != nil {
-			log.Printf("[TERMINAL] Sidecar port %d not ready for session %s: %v", port, sessionID, err)
-			http.Error(w, "Terminal is still starting up. Please refresh in a moment.", http.StatusServiceUnavailable)
-			return
-		}
-
 		// Handle WebSocket upgrade
 		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
 			proxyWebSocket(w, r, config, sessionID, session.Namespace, podName, port)
@@ -119,47 +109,6 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 
 		proxy.ServeHTTP(w, r)
 	}
-}
-
-func waitForTerminalProxyReady(ctx context.Context, host, namespace, podName string, port int, rt http.RoundTripper) error {
-	probeURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s:%d/proxy/", host, namespace, podName, port)
-	client := &http.Client{Transport: rt, Timeout: 2 * time.Second}
-
-	var lastErr error
-	for i := 0; i < 8; i++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-		if err != nil {
-			return err
-		}
-
-		resp, err := client.Do(req)
-		if err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-
-			// Any non-5xx means proxy path is reachable and sidecar listener exists.
-			if resp.StatusCode < 500 {
-				return nil
-			}
-			lastErr = fmt.Errorf("probe status %d", resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-
-		select {
-		case <-ctx.Done():
-			if lastErr != nil {
-				return lastErr
-			}
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("terminal sidecar did not become reachable")
-	}
-	return lastErr
 }
 
 func proxyWebSocket(w http.ResponseWriter, r *http.Request, config *rest.Config, sessionID, ns, podName string, port int) {

@@ -77,49 +77,50 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 
 		sessionID := cloudrun.GenerateSessionID()
 
+		if kc == nil {
+			http.Error(w, "Kubernetes orchestration is disabled", http.StatusServiceUnavailable)
+			return
+		}
+
 		var url string
 		var namespace string
 		var provisionErr error
 
-		if challenge.IsK8s {
-			if kc == nil {
-				http.Error(w, "Kubernetes orchestration is disabled", http.StatusServiceUnavailable)
-				return
-			}
-			safeUserID := strings.Map(func(r rune) rune {
-				if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-					return r
-				}
-				return '-'
-			}, strings.ToLower(req.UserID))
-			namespace = fmt.Sprintf("challenge-%s-%s", safeUserID, sessionID)
-			_, provisionErr = kc.ProvisionChallenge(r.Context(), &k8s.ChallengeConfig{
-				Namespace:     namespace,
-				ChallengeID:   req.LabType,
-				UserID:        req.UserID,
-				ExpiryHours:   0.17, // Cap at 10 minutes (1/6 hours)
-				CPUQuota:      challenge.CPUQuota,
-				MemoryQuota:   challenge.MemoryQuota,
-				PodQuota:      challenge.PodQuota,
-				Image:         challenge.Image,
-				StartupScript: challenge.StartupScript,
-				ConfigFiles:   challenge.ConfigFiles,
-			})
-			// In a real system, the URL would be the web terminal ingress for that namespace
-			// Return a proxy URL through our own backend to reach the K8s pod
-			url = fmt.Sprintf("%s/api/terminal/%s/", buildBaseURL(r), sessionID)
-		} else {
-			// Map database definitions to lab environment configuration
-			config := &cloudrun.LabConfig{
-				Image:         challenge.Image,
-				EnvVars:       challenge.EnvVars,
-				ConfigFiles:   challenge.ConfigFiles,
-				StartupScript: challenge.StartupScript,
-			}
-
-			// Deploy to Cloud Run API with Dynamic Injected Configs
-			url, provisionErr = crc.CreateLabContainer(sessionID, config)
+		cpuQuota := challenge.CPUQuota
+		if cpuQuota == "" {
+			cpuQuota = "200m"
 		}
+		memoryQuota := challenge.MemoryQuota
+		if memoryQuota == "" {
+			memoryQuota = "256Mi"
+		}
+		podQuota := challenge.PodQuota
+		if podQuota == "" {
+			podQuota = "5"
+		}
+
+		safeUserID := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '-'
+		}, strings.ToLower(req.UserID))
+		namespace = fmt.Sprintf("challenge-%s-%s", safeUserID, sessionID)
+		_, provisionErr = kc.ProvisionChallenge(r.Context(), &k8s.ChallengeConfig{
+			Namespace:     namespace,
+			ChallengeID:   req.LabType,
+			UserID:        req.UserID,
+			ExpiryHours:   0.17, // Cap at 10 minutes (1/6 hours)
+			CPUQuota:      cpuQuota,
+			MemoryQuota:   memoryQuota,
+			PodQuota:      podQuota,
+			Image:         challenge.Image,
+			EnvVars:       challenge.EnvVars,
+			StartupScript: challenge.StartupScript,
+			ConfigFiles:   challenge.ConfigFiles,
+		})
+		// Return backend terminal proxy URL for K8s-based labs.
+		url = fmt.Sprintf("%s/api/terminal/%s/", buildBaseURL(r), sessionID)
 
 		if provisionErr != nil {
 			if provisionErr.Error() == "cluster is currently being provisioned" {
@@ -138,7 +139,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			fmt.Printf("[ERROR] Session creation failed (manager cache): %v\n", err)
 			return
 		}
-		session.IsK8s = challenge.IsK8s
+		session.IsK8s = true
 		session.Namespace = namespace
 		// Cloud Run directly provides the terminal URL via HTTP!
 		log.Printf("[START] Returning lab URL: %s", url)
@@ -153,40 +154,60 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 	}
 }
 
-func GetCurrentSessionHandler(sm *cloudrun.SessionManager, dbClient *db.FirestoreClient) http.HandlerFunc {
+func GetCurrentSessionHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient, dbClient *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := r.URL.Query().Get("userId")
+		if userID == "" {
+			userID = r.Header.Get("X-User-ID")
+		}
 		if userID == "" {
 			http.Error(w, "Missing userId", http.StatusBadRequest)
 			return
 		}
 
-		if session, ok := sm.GetUserSession(userID); ok {
-			currentChallenge, _ := dbClient.GetChallenge(r.Context(), session.ChallengeID)
-			timeLimit := 300
-			if currentChallenge != nil {
-				timeLimit = currentChallenge.TimeLimit
+		session, ok := sm.GetUserSession(userID)
+		if !ok {
+			// Check if it's still being provisioned
+			if sm.IsProvisioning(userID) {
+				w.WriteHeader(http.StatusAccepted)
+				w.Write([]byte("Lab session is currently being provisioned"))
+				return
 			}
 
-			resp := StartLabResponse{
-				SessionID:   session.SessionID,
-				URL:         session.URL,
-				TimeLimit:   min(timeLimit, 600),
-				ChallengeID: session.ChallengeID,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
-		// Check if it's still being provisioned
-		if sm.IsProvisioning(userID) {
-			w.WriteHeader(http.StatusAccepted) // 202 Accepted means we are still working on it
-			w.Write([]byte("Lab session is currently being provisioned"))
-			return
+		// For K8s sessions, ensure terminal sidecar is actually ready before returning session as active.
+		if session.IsK8s && kc != nil {
+			ready, err := kc.CheckPodStatus(r.Context(), session.Namespace, "app=challenge-app")
+			if err != nil {
+				log.Printf("[CURRENT-SESSION] Pod readiness check failed for %s: %v", session.Namespace, err)
+				w.WriteHeader(http.StatusAccepted)
+				w.Write([]byte("Lab session is warming up"))
+				return
+			}
+			if !ready {
+				w.WriteHeader(http.StatusAccepted)
+				w.Write([]byte("Lab session is warming up"))
+				return
+			}
 		}
 
-		w.WriteHeader(http.StatusNotFound)
+		currentChallenge, _ := dbClient.GetChallenge(r.Context(), session.ChallengeID)
+		timeLimit := 300
+		if currentChallenge != nil {
+			timeLimit = currentChallenge.TimeLimit
+		}
+
+		resp := StartLabResponse{
+			SessionID:   session.SessionID,
+			URL:         session.URL,
+			TimeLimit:   min(timeLimit, 600),
+			ChallengeID: session.ChallengeID,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 	}
 }
 

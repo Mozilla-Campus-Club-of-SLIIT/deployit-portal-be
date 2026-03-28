@@ -1,7 +1,7 @@
 FROM alpine:3.19
 
 # Install base packages (fast, ~5MB)
-RUN apk add --no-cache bash nano curl ca-certificates
+RUN apk add --no-cache bash nano curl ca-certificates docker iptables ip6tables
 
 # Install kubectl (pinned version for stability)
 ARG KUBECTL_VERSION=v1.29.0
@@ -17,6 +17,6 @@ RUN curl -fsSL -L -o /usr/local/bin/ttyd \
     chmod +x /usr/local/bin/ttyd
 
 # Smoke-test both binaries exist and execute
-RUN kubectl version --client && ttyd --version
+RUN kubectl version --client && ttyd --version && docker --version && dockerd --version
 
 ENTRYPOINT ["/bin/sh"]
