@@ -69,7 +69,7 @@ func main() {
 		log.Printf("Failed to initialize K8s Client (K8s challenges disabled): %v", err)
 	}
 
-	sessionManager := cloudrun.NewSessionManager(cloudrunClient, k8sClient, 100)
+	sessionManager := cloudrun.NewSessionManager(cloudrunClient, k8sClient, 220)
 
 	mux := http.NewServeMux()
 	
@@ -145,7 +145,7 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("Server listening on :%s (Concurrency limit: 100)", port)
+	log.Printf("Server listening on :%s (Concurrency limit: 220)", port)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

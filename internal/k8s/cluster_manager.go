@@ -151,7 +151,7 @@ func (cm *ClusterManager) ManualCreateCluster(ctx context.Context) error {
 					Autoscaling: &container.NodePoolAutoscaling{
 						Enabled:      true,
 						MinNodeCount: 1,
-						MaxNodeCount: 15, // Cap at 15 * 2 = 30 vCPUs (Strictly under 32-CPU quota)
+						MaxNodeCount: 24, // Cap at 24 * 2 = 48 vCPUs for higher lab concurrency
 					},
 					Config: &container.NodeConfig{
 						MachineType: "e2-standard-2", // Upgraded hardware to fit more pods per node
