@@ -8,13 +8,25 @@ import (
 
 func GetAttemptsHandler(fc *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := r.URL.Query().Get("userId")
-		if userID == "" {
-			http.Error(w, "Missing userID param", http.StatusBadRequest)
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		attempts, err := fc.ListAttempts(r.Context(), userID)
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		requestedUserID := claims.UserID
+		if claims.Role == "admin" {
+			if q := r.URL.Query().Get("userId"); q != "" {
+				requestedUserID = q
+			}
+		}
+
+		attempts, err := fc.ListAttempts(r.Context(), requestedUserID)
 		if err != nil {
 			http.Error(w, "Failed to list attempts: "+err.Error(), http.StatusInternalServerError)
 			return

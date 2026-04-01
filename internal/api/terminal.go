@@ -16,6 +16,12 @@ import (
 func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[TERMINAL] Incoming request: %s %s (Upgrade: %s)", r.Method, r.URL.Path, r.Header.Get("Upgrade"))
+
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		
 		w.Header().Set("X-Frame-Options", "ALLOWALL")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors *")
@@ -32,6 +38,12 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 			http.Error(w, "Session not found", http.StatusNotFound)
 			return
 		}
+
+		if claims.Role != "admin" && session.UserID != claims.UserID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
 		if !session.IsK8s {
 			log.Printf("[TERMINAL] Error: Session %s is not a Kubernetes session", sessionID)
 			http.Error(w, "Not a K8s session", http.StatusBadRequest)

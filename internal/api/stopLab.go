@@ -23,6 +23,17 @@ type StopLabResponse struct {
 
 func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s.K8sClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		var req StopLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -37,6 +48,11 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s
 		session, ok := sm.GetSession(req.SessionID)
 		if !ok {
 			json.NewEncoder(w).Encode(StopLabResponse{Status: "failure", Result: "SESSION_NOT_FOUND"})
+			return
+		}
+
+		if claims.Role != "admin" && session.UserID != claims.UserID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 

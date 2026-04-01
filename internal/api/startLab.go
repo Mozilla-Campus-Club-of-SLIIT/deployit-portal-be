@@ -27,6 +27,17 @@ type StartLabResponse struct {
 
 func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, kc *k8s.K8sClient, dbClient *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		var req StartLabRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -34,9 +45,15 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			return
 		}
 
-		if req.UserID == "" {
-			http.Error(w, "Missing userID", http.StatusBadRequest)
-			return
+		if claims.Role == "admin" {
+			if req.UserID == "" {
+				http.Error(w, "Missing userID", http.StatusBadRequest)
+				return
+			}
+		} else {
+			// Always bind non-admin requests to token identity.
+			req.UserID = claims.UserID
+			req.UserEmail = claims.Email
 		}
 
 		// Check if user already has an active session
@@ -161,19 +178,28 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 
 func GetCurrentSessionHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient, dbClient *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := r.URL.Query().Get("userId")
-		if userID == "" {
-			userID = r.Header.Get("X-User-ID")
-		}
-		if userID == "" {
-			http.Error(w, "Missing userId", http.StatusBadRequest)
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		session, ok := sm.GetUserSession(userID)
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		requestedUserID := claims.UserID
+		if claims.Role == "admin" {
+			if q := r.URL.Query().Get("userId"); q != "" {
+				requestedUserID = q
+			}
+		}
+
+		session, ok := sm.GetUserSession(requestedUserID)
 		if !ok {
 			// Check if it's still being provisioned
-			if sm.IsProvisioning(userID) {
+			if sm.IsProvisioning(requestedUserID) {
 				w.WriteHeader(http.StatusAccepted)
 				w.Write([]byte("Lab session is currently being provisioned"))
 				return

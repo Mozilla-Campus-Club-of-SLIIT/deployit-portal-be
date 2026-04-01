@@ -86,6 +86,12 @@ func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[upload-avatar] Received %s request from %s", r.Method, r.RemoteAddr)
 
+		claims := ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -98,11 +104,14 @@ func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 		}
 
 		userID := r.FormValue("userId")
-		log.Printf("[upload-avatar] userId=%q", userID)
 		if userID == "" {
-			http.Error(w, "userId is required", http.StatusBadRequest)
+			userID = claims.UserID
+		}
+		if claims.Role != "admin" && userID != claims.UserID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+		log.Printf("[upload-avatar] userId=%q", userID)
 
 		file, handler, err := r.FormFile("avatar")
 		if err != nil {

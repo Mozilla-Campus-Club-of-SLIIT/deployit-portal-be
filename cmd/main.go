@@ -105,7 +105,7 @@ func main() {
 	mux.HandleFunc("/api/current-session", api.RequireAuth(api.GetCurrentSessionHandler(sessionManager, k8sClient, firestoreClient)))
 	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, k8sClient, firestoreClient)))
 	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient, k8sClient)))
-	mux.HandleFunc("/api/terminal/", api.TerminalProxyHandler(sessionManager, k8sClient))
+	mux.HandleFunc("/api/terminal/", api.RequireAuth(api.TerminalProxyHandler(sessionManager, k8sClient)))
 
 	// --- Admin-only routes ---
 	mux.HandleFunc("/api/users", api.RequireAdmin(api.ListUsersHandler(firestoreClient)))
@@ -115,7 +115,7 @@ func main() {
 	mux.HandleFunc("/api/admins", api.RequireAdmin(api.ListAdminsHandler(firestoreClient)))
 	mux.HandleFunc("/api/admins/add", api.RequireAdmin(api.CreateAdminHandler(firestoreClient)))
 	mux.HandleFunc("/api/cluster/status", api.RequireAdmin(api.GetClusterStatusHandler(k8sClient)))
-	mux.HandleFunc("/api/cluster/status/ws", api.GetClusterStatusWS(k8sClient))
+	mux.HandleFunc("/api/cluster/status/ws", api.RequireAdmin(api.GetClusterStatusWS(k8sClient)))
 	mux.HandleFunc("/api/cluster/create", api.RequireAdmin(api.CreateClusterHandler(k8sClient)))
 	mux.HandleFunc("/api/cluster/delete", api.RequireAdmin(api.DeleteClusterHandler(k8sClient)))
 	mux.HandleFunc("/api/sessions", api.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {
