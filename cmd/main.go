@@ -144,15 +144,15 @@ func main() {
 	// --- Public routes ---
 	mux.HandleFunc("/api/challenges", api.GetChallengesHandler(firestoreClient))
 	mux.HandleFunc("/api/leaderboard", api.LeaderboardHandler(firestoreClient))
-	mux.HandleFunc("/api/register", rateLimiter.LimitByIP(api.RegisterHandler(firestoreClient), "register", 6, time.Minute))
-	mux.HandleFunc("/api/login", rateLimiter.LimitByIP(api.LoginHandler(firestoreClient), "login", 12, time.Minute))
-	mux.HandleFunc("/api/forgot-password", rateLimiter.LimitByIP(api.ForgotPasswordHandler(firestoreClient), "forgot-password", 6, time.Minute))
+	mux.HandleFunc("/api/register", rateLimiter.LimitByIP(api.RegisterHandler(firestoreClient), "register", 40, time.Minute))
+	mux.HandleFunc("/api/login", rateLimiter.LimitByIP(api.LoginHandler(firestoreClient), "login", 120, time.Minute))
+	mux.HandleFunc("/api/forgot-password", rateLimiter.LimitByIP(api.ForgotPasswordHandler(firestoreClient), "forgot-password", 40, time.Minute))
 
 	// --- Authenticated user routes ---
 	mux.HandleFunc("/api/attempts", api.RequireAuth(api.GetAttemptsHandler(firestoreClient)))
 	mux.HandleFunc("/api/upload-avatar", api.RequireAuth(api.UploadAvatarHandler(firestoreClient)))
-	mux.HandleFunc("/api/send-verification", api.RequireAuth(rateLimiter.LimitByIP(api.SendVerificationHandler(firestoreClient), "send-verification", 6, time.Minute)))
-	mux.HandleFunc("/api/verify-otp", api.RequireAuth(rateLimiter.LimitByIP(api.VerifyOtpHandler(firestoreClient), "verify-otp", 12, time.Minute)))
+	mux.HandleFunc("/api/send-verification", api.RequireAuth(rateLimiter.LimitByIP(api.SendVerificationHandler(firestoreClient), "send-verification", 40, time.Minute)))
+	mux.HandleFunc("/api/verify-otp", api.RequireAuth(rateLimiter.LimitByIP(api.VerifyOtpHandler(firestoreClient), "verify-otp", 120, time.Minute)))
 	mux.HandleFunc("/api/current-session", api.RequireAuth(api.GetCurrentSessionHandler(sessionManager, k8sClient, firestoreClient)))
 	mux.HandleFunc("/start-lab", api.RequireAuth(api.StartLabHandler(sessionManager, cloudrunClient, k8sClient, firestoreClient)))
 	mux.HandleFunc("/stop-lab", api.RequireAuth(api.StopLabHandler(sessionManager, firestoreClient, k8sClient)))
@@ -165,6 +165,7 @@ func main() {
 	mux.HandleFunc("/api/challenges/delete", api.RequireAdmin(api.DeleteChallengeHandler(firestoreClient)))
 	mux.HandleFunc("/api/admins", api.RequireAdmin(api.ListAdminsHandler(firestoreClient)))
 	mux.HandleFunc("/api/admins/add", api.RequireAdmin(api.CreateAdminHandler(firestoreClient)))
+	mux.HandleFunc("/api/admin/runtime-stats", api.RequireAdmin(api.RuntimeStatsHandler()))
 	mux.HandleFunc("/api/cluster/status", api.RequireAdmin(api.GetClusterStatusHandler(k8sClient)))
 	mux.HandleFunc("/api/cluster/status/ws", api.RequireAdmin(api.GetClusterStatusWS(k8sClient, allowedOrigins)))
 	mux.HandleFunc("/api/cluster/create", api.RequireAdmin(api.CreateClusterHandler(k8sClient)))
