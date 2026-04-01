@@ -59,10 +59,14 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			return
 		}
 
+		// 1. Sanitize the user-controlled data
+		cleanUserID := strings.ReplaceAll(strings.ReplaceAll(req.UserID, "\n", ""), "\r", "")
+
 		// Lock the user's session creation process to prevent concurrent provisionings (race conditions)
 		if err := sm.LockSession(req.UserID); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
-			fmt.Printf("[WARN] Concurrent lab start attempt blocked for user %s: %v\n", req.UserID, err)
+			// 2. Use the cleaned variable in the log
+			fmt.Printf("[WARN] Concurrent lab start attempt blocked for user %s: %v\n", cleanUserID, err)
 			return
 		}
 		defer sm.UnlockSession(req.UserID)
@@ -76,6 +80,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 		}
 
 		sessionID := cloudrun.GenerateSessionID()
+		
 
 		if kc == nil {
 			http.Error(w, "Kubernetes orchestration is disabled", http.StatusServiceUnavailable)
