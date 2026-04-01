@@ -13,7 +13,15 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.HandlerFunc {
+func buildFrameAncestorsPolicy(allowedOrigins map[string]struct{}) string {
+	ancestors := []string{"'self'"}
+	for origin := range allowedOrigins {
+		ancestors = append(ancestors, origin)
+	}
+	return "frame-ancestors " + strings.Join(ancestors, " ")
+}
+
+func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient, allowedOrigins map[string]struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[TERMINAL] Incoming request: %s %s (Upgrade: %s)", r.Method, r.URL.Path, r.Header.Get("Upgrade"))
 
@@ -22,10 +30,17 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient) http.H
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		
-		w.Header().Set("X-Frame-Options", "ALLOWALL")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors *")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if _, ok := allowedOrigins[origin]; !ok {
+				http.Error(w, "Origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Content-Security-Policy", buildFrameAncestorsPolicy(allowedOrigins))
 
 		sessionID := strings.TrimPrefix(r.URL.Path, "/api/terminal/")
 		if i := strings.Index(sessionID, "/"); i != -1 {

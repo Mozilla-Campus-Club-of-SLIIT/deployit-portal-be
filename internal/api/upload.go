@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/storage"
 	firebase "firebase.google.com/go"
@@ -18,6 +19,25 @@ import (
 
 type UploadAvatarResponse struct {
 	PhotoURL string `json:"photoUrl"`
+}
+
+func buildSignedAvatarURL(bucketName, objectPath string) (string, error) {
+	clientEmail := strings.TrimSpace(os.Getenv("GCP_SA_CLIENT_EMAIL"))
+	privateKey := strings.ReplaceAll(strings.TrimSpace(os.Getenv("GCP_SA_PRIVATE_KEY")), "\\n", "\n")
+	if clientEmail == "" || privateKey == "" {
+		return "", fmt.Errorf("missing signing credentials for avatar URL")
+	}
+
+	url, err := storage.SignedURL(bucketName, objectPath, &storage.SignedURLOptions{
+		GoogleAccessID: clientEmail,
+		PrivateKey:     []byte(privateKey),
+		Method:         http.MethodGet,
+		Expires:        time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create signed URL: %w", err)
+	}
+	return url, nil
 }
 
 func initStorageBucket(ctx context.Context) (*storage.BucketHandle, string, error) {
@@ -81,7 +101,7 @@ func initStorageBucket(ctx context.Context) (*storage.BucketHandle, string, erro
 
 // UploadAvatarHandler accepts a multipart image upload, stores it in Firebase Storage
 // server-side (no CORS issues), updates the Firestore user document with the photoUrl,
-// and returns the public download URL.
+// and returns a time-limited signed download URL.
 func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[upload-avatar] Received %s request from %s", r.Method, r.RemoteAddr)
@@ -155,7 +175,6 @@ func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 			contentType = "image/jpeg"
 		}
 		wc.ContentType = contentType
-		wc.ACL = []storage.ACLRule{{Entity: storage.AllUsers, Role: storage.RoleReader}}
 
 		written, err := io.Copy(wc, file)
 		if err != nil {
@@ -172,7 +191,12 @@ func UploadAvatarHandler(fc *db.FirestoreClient) http.HandlerFunc {
 		}
 		log.Printf("[upload-avatar] Upload complete!")
 
-		photoURL := fmt.Sprintf("https://storage.googleapis.com/%s/%s", bucketName, objectPath)
+		photoURL, err := buildSignedAvatarURL(bucketName, objectPath)
+		if err != nil {
+			log.Printf("[upload-avatar] Signed URL creation failed: %v", err)
+			http.Error(w, "Failed to generate secure avatar URL", http.StatusInternalServerError)
+			return
+		}
 		log.Printf("[upload-avatar] photoURL=%s", photoURL)
 
 		if fc != nil {

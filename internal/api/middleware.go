@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -16,6 +18,45 @@ type contextKey string
 
 const claimsKey contextKey = "claims"
 
+type authzAuditEvent struct {
+	Event     string `json:"event"`
+	RequestID string `json:"requestId"`
+	UserID    string `json:"userId"`
+	Route     string `json:"route"`
+	Action    string `json:"action"`
+	Result    string `json:"result"`
+}
+
+func requestIDFromRequest(r *http.Request) string {
+	if id := strings.TrimSpace(r.Header.Get("X-Request-Id")); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(r.Header.Get("X-Correlation-Id")); id != "" {
+		return id
+	}
+	return fmt.Sprintf("req-%d", time.Now().UnixNano())
+}
+
+func logAuthzEvent(r *http.Request, userID, action, result string) {
+	if userID == "" {
+		userID = "unknown"
+	}
+	evt := authzAuditEvent{
+		Event:     "authz",
+		RequestID: requestIDFromRequest(r),
+		UserID:    userID,
+		Route:     r.URL.Path,
+		Action:    action,
+		Result:    result,
+	}
+	b, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("{\"event\":\"authz\",\"requestId\":\"%s\",\"userId\":\"%s\",\"route\":\"%s\",\"action\":\"%s\",\"result\":\"%s\"}", evt.RequestID, evt.UserID, evt.Route, evt.Action, evt.Result)
+		return
+	}
+	log.Printf("%s", string(b))
+}
+
 // AdminClaims holds the JWT payload for authenticated admin users.
 type AdminClaims struct {
 	UserID string `json:"userId"`
@@ -24,14 +65,17 @@ type AdminClaims struct {
 	jwt.RegisteredClaims
 }
 
-// jwtSecret returns the signing secret from the environment, with a fallback.
-func jwtSecret() []byte {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		// Fallback for dev — in production JWT_SECRET must be set
-		return []byte("devops-lab-dev-secret-change-in-prod")
+// ValidateJWTSecret ensures the JWT signing secret is configured.
+func ValidateJWTSecret() error {
+	if strings.TrimSpace(os.Getenv("JWT_SECRET")) == "" {
+		return fmt.Errorf("JWT_SECRET must be set")
 	}
-	return []byte(secret)
+	return nil
+}
+
+// jwtSecret returns the signing secret from the environment.
+func jwtSecret() []byte {
+	return []byte(os.Getenv("JWT_SECRET"))
 }
 
 // GenerateToken creates a signed JWT for the given user. Expires in 12 hours.
@@ -84,14 +128,17 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := extractToken(r)
 		if tokenStr == "" {
+			logAuthzEvent(r, "", "require_auth", "deny")
 			http.Error(w, "Authorization token required", http.StatusUnauthorized)
 			return
 		}
 		claims, err := parseToken(tokenStr)
 		if err != nil {
+			logAuthzEvent(r, "", "require_auth", "deny")
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
+		logAuthzEvent(r, claims.UserID, "require_auth", "allow")
 		// Inject claims into context for downstream handlers
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next(w, r.WithContext(ctx))
@@ -104,18 +151,22 @@ func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := extractToken(r)
 		if tokenStr == "" {
+			logAuthzEvent(r, "", "require_admin", "deny")
 			http.Error(w, "Authorization token required", http.StatusUnauthorized)
 			return
 		}
 		claims, err := parseToken(tokenStr)
 		if err != nil {
+			logAuthzEvent(r, "", "require_admin", "deny")
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
 		if claims.Role != "admin" {
+			logAuthzEvent(r, claims.UserID, "require_admin", "deny")
 			http.Error(w, "Forbidden: admin access required", http.StatusForbidden)
 			return
 		}
+		logAuthzEvent(r, claims.UserID, "require_admin", "allow")
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next(w, r.WithContext(ctx))
 	}

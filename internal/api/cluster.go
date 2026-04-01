@@ -10,17 +10,25 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
 // GetClusterStatusWS handles WebSocket connections for real-time cluster status updates
 // WS /api/cluster/status/ws
-func GetClusterStatusWS(k8sClient *k8s.K8sClient) http.HandlerFunc {
+func GetClusterStatusWS(k8sClient *k8s.K8sClient, allowedOrigins map[string]struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{
+			CheckOrigin: func(req *http.Request) bool {
+				origin := req.Header.Get("Origin")
+				if origin == "" {
+					return false
+				}
+				_, ok := allowedOrigins[origin]
+				return ok
+			},
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("Failed to upgrade websocket: %v", err)
+			http.Error(w, "Origin not allowed", http.StatusForbidden)
 			return
 		}
 		defer conn.Close()
