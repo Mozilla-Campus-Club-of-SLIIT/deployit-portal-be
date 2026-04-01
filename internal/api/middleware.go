@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -119,6 +120,27 @@ func extractToken(r *http.Request) string {
 	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
 		return parts[1]
 	}
+
+	// Browser iframes/WebSocket upgrades cannot reliably attach custom Authorization headers.
+	// Accept terminal token from query, cookie, or referer for terminal subrequests only.
+	if strings.HasPrefix(r.URL.Path, "/api/terminal/") {
+		if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+			return token
+		}
+		if c, err := r.Cookie("terminal_token"); err == nil {
+			if token := strings.TrimSpace(c.Value); token != "" {
+				return token
+			}
+		}
+		if ref := strings.TrimSpace(r.Header.Get("Referer")); ref != "" {
+			if u, err := url.Parse(ref); err == nil && strings.HasPrefix(u.Path, "/api/terminal/") {
+				if token := strings.TrimSpace(u.Query().Get("token")); token != "" {
+					return token
+				}
+			}
+		}
+	}
+
 	return ""
 }
 

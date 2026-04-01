@@ -42,7 +42,12 @@ func CORSMiddleware(next http.Handler, allowedOrigins map[string]struct{}) http.
 
 		// Set Strict Security Headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		// Terminal is intentionally embedded in an iframe; keep DENY elsewhere.
+		if strings.HasPrefix(r.URL.Path, "/api/terminal/") {
+			w.Header().Del("X-Frame-Options")
+		} else {
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")

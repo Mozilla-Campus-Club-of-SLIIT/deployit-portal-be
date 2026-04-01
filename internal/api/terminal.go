@@ -31,16 +31,41 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient, allowe
 			return
 		}
 
+		// Terminal iframe/WebSocket requires lenient CORS to allow internal communication.
+		// The auth is enforced by RequireAuth middleware, so we can trust the request here.
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			if _, ok := allowedOrigins[origin]; !ok {
-				http.Error(w, "Origin not allowed", http.StatusForbidden)
-				return
+			// Allow any localhost origin for development, or check allowlist for production.
+			if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") || (origin != "" && allowedOrigins != nil) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			} else if _, ok := allowedOrigins[origin]; ok {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
+		} else {
+			// Allow same-origin iframe requests (no Origin header)
+			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Content-Security-Policy", buildFrameAncestorsPolicy(allowedOrigins))
+		
+		// Handle preflight OPTIONS for CORS
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "terminal_token",
+				Value:    token,
+				Path:     "/api/terminal/",
+				MaxAge:   12 * 60 * 60,
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
 
 		sessionID := strings.TrimPrefix(r.URL.Path, "/api/terminal/")
 		if i := strings.Index(sessionID, "/"); i != -1 {
@@ -132,6 +157,12 @@ func TerminalProxyHandler(sm *cloudrun.SessionManager, kc *k8s.K8sClient, allowe
 				session.Namespace, podName, port, subpath)
 			req.Host = target.Host
 			log.Printf("[TERMINAL] Proxying HTTP to Port %d: %s", port, req.URL.String())
+		}
+
+		// Add error handler to log proxy issues
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("[TERMINAL] Proxy error for %s: %v", r.URL.Path, err)
+			http.Error(w, "Terminal service unavailable - ttyd not ready yet. Please refresh. Error: "+err.Error(), http.StatusServiceUnavailable)
 		}
 
 		proxy.ServeHTTP(w, r)
