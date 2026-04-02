@@ -367,12 +367,11 @@ func (fc *FirestoreClient) ListAttempts(ctx context.Context, userID string) ([]C
 	return attempts, nil
 }
 
-// HasAttemptedChallenge checks if a user has already successfully attempted a specific challenge
+// HasAttemptedChallenge checks if a user has already attempted a specific challenge
 func (fc *FirestoreClient) HasAttemptedChallenge(ctx context.Context, userID, challengeID string) (bool, error) {
 	docs, err := fc.client.Collection("attempts").
 		Where("userId", "==", userID).
 		Where("challengeId", "==", challengeID).
-		Where("result", "==", "SUCCESS").
 		Limit(1).
 		Documents(ctx).GetAll()
 
