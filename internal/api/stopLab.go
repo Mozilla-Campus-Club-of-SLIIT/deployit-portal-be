@@ -99,44 +99,23 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s
 				req.SessionID, session.ChallengeID, session.UserID, result)
 			log.Printf("[EVALUATION OUTPUT] %s\n", evalOutput)
 
-			scoreEarned := 0
-			if result == "SUCCESS" {
-				// Only award points on the FIRST attempt overall for this challenge.
-				// If the user failed before, later passes should not award score.
-				var hasAttemptedBefore bool
-				if fc != nil {
-					hasAttemptedBefore, _ = fc.HasAttemptedChallenge(r.Context(), session.UserID, session.ChallengeID)
-				}
-				if !hasAttemptedBefore {
-					scoreEarned = session.ChallengeScore
-				} else {
-					log.Printf("[EVALUATION] User %s has already attempted %s before. No score awarded.\n", session.UserID, session.ChallengeID)
-				}
-			}
-
-			// Save the attempt to Firestore
+			// Save attempt and apply score atomically:
+			// only first-attempt SUCCESS can award points.
 			if fc != nil {
-				err := fc.SaveAttempt(r.Context(), &db.ChallengeAttempt{
+				scoreEarned, err := fc.SaveAttemptAndApplyScore(r.Context(), &db.ChallengeAttempt{
 					UserID:          session.UserID,
 					UserEmail:       session.UserEmail,
 					UserDisplayName: session.UserDisplayName,
 					ChallengeID:     session.ChallengeID,
 					Result:          result,
-					ScoreEarned:     scoreEarned,
 					Output:          evalOutput,
-				})
+				}, session.ChallengeScore)
 				if err != nil {
-					log.Printf("[ERROR] Failed to save evaluation attempt to Firestore: %v\n", err)
+					log.Printf("[ERROR] Failed to save evaluation attempt/apply score: %v\n", err)
 				} else {
 					log.Printf("[DATABASE] Attempt saved for user %s\n", session.UserID)
-					// If successful, increment user's total score
-					if result == "SUCCESS" && scoreEarned > 0 {
-						err := fc.IncrementUserScore(r.Context(), session.UserID, scoreEarned)
-						if err != nil {
-							log.Printf("[ERROR] Failed to increment user score: %v\n", err)
-						} else {
-							log.Printf("[DATABASE] User %s total score incremented by %d\n", session.UserID, scoreEarned)
-						}
+					if scoreEarned > 0 {
+						log.Printf("[DATABASE] User %s total score incremented by %d\n", session.UserID, scoreEarned)
 					}
 				}
 			}

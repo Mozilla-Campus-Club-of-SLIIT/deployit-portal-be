@@ -13,6 +13,8 @@ import (
 	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Challenge struct {
@@ -332,6 +334,101 @@ func (fc *FirestoreClient) SaveAttempt(ctx context.Context, attempt *ChallengeAt
 	attempt.ID = ref.ID
 	_, err := ref.Set(ctx, attempt)
 	return err
+}
+
+// SaveAttemptAndApplyScore saves an attempt and updates totalScore atomically.
+// Points are awarded only when the first attempt for a challenge is SUCCESS.
+func (fc *FirestoreClient) SaveAttemptAndApplyScore(ctx context.Context, attempt *ChallengeAttempt, challengeScore int) (int, error) {
+	if attempt == nil {
+		return 0, fmt.Errorf("attempt is required")
+	}
+	if attempt.UserID == "" {
+		return 0, fmt.Errorf("userId is required")
+	}
+	if attempt.ChallengeID == "" {
+		return 0, fmt.Errorf("challengeId is required")
+	}
+	if challengeScore < 0 {
+		challengeScore = 0
+	}
+
+	now := time.Now()
+	attemptRef := fc.client.Collection("attempts").NewDoc()
+	trackerRef := fc.client.Collection("userChallengeAttempts").Doc(attempt.UserID + "_" + attempt.ChallengeID)
+	userRef := fc.client.Collection("users").Doc(attempt.UserID)
+
+	awardedScore := 0
+	err := fc.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		attemptCount := 0
+
+		trackerSnap, err := tx.Get(trackerRef)
+		if err != nil {
+			if status.Code(err) != codes.NotFound {
+				return err
+			}
+
+			// Backfill-safe fallback: if the tracker doc doesn't exist yet,
+			// inspect existing attempts so historical data still enforces the rule.
+			docs, qErr := tx.Documents(fc.client.Collection("attempts").
+				Where("userId", "==", attempt.UserID).
+				Where("challengeId", "==", attempt.ChallengeID).
+				Limit(1)).GetAll()
+			if qErr != nil {
+				return qErr
+			}
+			if len(docs) > 0 {
+				attemptCount = 1
+			}
+		} else {
+			var tracker struct {
+				AttemptCount int `firestore:"attemptCount"`
+			}
+			if decodeErr := trackerSnap.DataTo(&tracker); decodeErr != nil {
+				return decodeErr
+			}
+			if tracker.AttemptCount > 0 {
+				attemptCount = tracker.AttemptCount
+			}
+		}
+
+		if attempt.Result == "SUCCESS" && attemptCount == 0 {
+			awardedScore = challengeScore
+		}
+
+		attempt.ID = attemptRef.ID
+		attempt.Timestamp = now
+		attempt.ScoreEarned = awardedScore
+
+		if err := tx.Set(attemptRef, attempt); err != nil {
+			return err
+		}
+
+		if awardedScore > 0 {
+			if err := tx.Update(userRef, []firestore.Update{{
+				Path:  "totalScore",
+				Value: firestore.Increment(awardedScore),
+			}}); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Set(trackerRef, map[string]interface{}{
+			"userId":      attempt.UserID,
+			"challengeId": attempt.ChallengeID,
+			"attemptCount": attemptCount + 1,
+			"updatedAt":   now,
+		}, firestore.MergeAll); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	return awardedScore, nil
 }
 
 // ListAttempts retrieves all attempts for a specific user
