@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -354,7 +355,10 @@ func (fc *FirestoreClient) SaveAttemptAndApplyScore(ctx context.Context, attempt
 
 	now := time.Now()
 	attemptRef := fc.client.Collection("attempts").NewDoc()
-	trackerRef := fc.client.Collection("userChallengeAttempts").Doc(attempt.UserID + "_" + attempt.ChallengeID)
+	normalizedUserID := strings.ToLower(strings.TrimSpace(attempt.UserID))
+	normalizedChallengeID := strings.ToLower(strings.TrimSpace(attempt.ChallengeID))
+	trackerID := url.QueryEscape(normalizedUserID) + "__" + url.QueryEscape(normalizedChallengeID)
+	trackerRef := fc.client.Collection("userChallengeAttempts").Doc(trackerID)
 	userRef := fc.client.Collection("users").Doc(attempt.UserID)
 
 	awardedScore := 0
@@ -415,6 +419,8 @@ func (fc *FirestoreClient) SaveAttemptAndApplyScore(ctx context.Context, attempt
 		if err := tx.Set(trackerRef, map[string]interface{}{
 			"userId":      attempt.UserID,
 			"challengeId": attempt.ChallengeID,
+			"normalizedUserId": normalizedUserID,
+			"normalizedChallengeId": normalizedChallengeID,
 			"attemptCount": attemptCount + 1,
 			"updatedAt":   now,
 		}, firestore.MergeAll); err != nil {

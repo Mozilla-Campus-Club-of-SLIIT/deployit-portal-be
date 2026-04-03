@@ -95,6 +95,10 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			fmt.Printf("[ERROR] Challenge Firestore lookup error %s: %v\n", req.LabType, err)
 			return
 		}
+		challengeID := challenge.ID
+		if challengeID == "" {
+			challengeID = req.LabType
+		}
 
 		sessionID := cloudrun.GenerateSessionID()
 		
@@ -130,7 +134,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 		namespace = fmt.Sprintf("challenge-%s-%s", safeUserID, sessionID)
 		_, provisionErr = kc.ProvisionChallenge(r.Context(), &k8s.ChallengeConfig{
 			Namespace:     namespace,
-			ChallengeID:   req.LabType,
+			ChallengeID:   challengeID,
 			UserID:        req.UserID,
 			ExpiryHours:   0.17, // Cap at 10 minutes (1/6 hours)
 			CPUQuota:      cpuQuota,
@@ -155,7 +159,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			return
 		}
 
-		session, err := sm.CreateSession(url, sessionID, req.UserID, req.UserEmail, req.UserDisplayName, req.LabType, challenge.Score, challenge.EndScript)
+		session, err := sm.CreateSession(url, sessionID, req.UserID, req.UserEmail, req.UserDisplayName, challengeID, challenge.Score, challenge.EndScript)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			fmt.Printf("[ERROR] Session creation failed (manager cache): %v\n", err)
@@ -169,7 +173,7 @@ func StartLabHandler(sm *cloudrun.SessionManager, crc *cloudrun.CloudRunClient, 
 			SessionID:   session.SessionID,
 			URL:         url,
 			TimeLimit:   min(challenge.TimeLimit, 600),
-			ChallengeID: req.LabType,
+			ChallengeID: challengeID,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
