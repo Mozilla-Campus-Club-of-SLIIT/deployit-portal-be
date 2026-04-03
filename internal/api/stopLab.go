@@ -101,15 +101,16 @@ func StopLabHandler(sm *cloudrun.SessionManager, fc *db.FirestoreClient, kc *k8s
 
 			scoreEarned := 0
 			if result == "SUCCESS" {
-				// Only award points on the FIRST attempt
-				var hasAttempted bool
+				// Only award points on the FIRST attempt overall for this challenge.
+				// If the user failed before, later passes should not award score.
+				var hasAttemptedBefore bool
 				if fc != nil {
-					hasAttempted, _ = fc.HasAttemptedChallenge(r.Context(), session.UserID, session.ChallengeID)
+					hasAttemptedBefore, _ = fc.HasAttemptedChallenge(r.Context(), session.UserID, session.ChallengeID)
 				}
-				if !hasAttempted {
+				if !hasAttemptedBefore {
 					scoreEarned = session.ChallengeScore
 				} else {
-					log.Printf("[EVALUATION] User %s has already attempted %s. No score awarded.\n", session.UserID, session.ChallengeID)
+					log.Printf("[EVALUATION] User %s has already attempted %s before. No score awarded.\n", session.UserID, session.ChallengeID)
 				}
 			}
 

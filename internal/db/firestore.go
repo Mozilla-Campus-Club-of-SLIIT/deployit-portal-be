@@ -367,7 +367,24 @@ func (fc *FirestoreClient) ListAttempts(ctx context.Context, userID string) ([]C
 	return attempts, nil
 }
 
-// HasAttemptedChallenge checks if a user has already attempted a specific challenge
+// HasSuccessfulAttemptedChallenge checks whether a user has already passed a specific challenge.
+// Score should only be awarded on the first SUCCESS for that challenge.
+func (fc *FirestoreClient) HasSuccessfulAttemptedChallenge(ctx context.Context, userID, challengeID string) (bool, error) {
+	docs, err := fc.client.Collection("attempts").
+		Where("userId", "==", userID).
+		Where("challengeId", "==", challengeID).
+		Where("result", "==", "SUCCESS").
+		Limit(1).
+		Documents(ctx).GetAll()
+
+	if err != nil {
+		return false, err
+	}
+	return len(docs) > 0, nil
+}
+
+// HasAttemptedChallenge checks whether a user has any prior attempt for a specific challenge.
+// Used for strict first-attempt-only scoring.
 func (fc *FirestoreClient) HasAttemptedChallenge(ctx context.Context, userID, challengeID string) (bool, error) {
 	docs, err := fc.client.Collection("attempts").
 		Where("userId", "==", userID).
